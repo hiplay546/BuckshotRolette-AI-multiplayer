@@ -5,6 +5,7 @@ import argparse
 import json
 import os
 import math
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -102,7 +103,8 @@ def ask_model(key: str, model: str, observation: dict) -> tuple[dict, dict]:
             {"role": "system", "content": (
                 "You are one player in a real four-player Buckshot Roulette match. "
                 "Choose exactly one action from the numbered candidates. "
-                "A blank shot at yourself can retain the turn; a live shot deals damage. "
+                "A blank shot at yourself retains your turn; a blank shot at another player passes it. "
+                "A live shot deals damage. "
                 "Items may reveal private information, change the shell, or affect a player. "
                 "Never invent an action. Reply only as JSON: {\"choice\": integer, \"reason\": short string}."
             )},
@@ -166,9 +168,13 @@ def action_settled(before: dict, after: dict, selected: dict) -> bool:
 
 
 def wait_for_next_state(directory: Path, player_number: int, before: dict, selected: dict) -> tuple[dict | None, str]:
-    deadline = time.monotonic() + 30
+    deadline = time.monotonic() + 90
+    next_notice = time.monotonic() + 10
     while time.monotonic() < deadline:
         time.sleep(0.25)
+        if time.monotonic() >= next_notice:
+            print("Waiting for the game to finish this action...", flush=True)
+            next_notice += 10
         try:
             after = read_state(directory, player_number)
         except ValueError:
@@ -179,7 +185,7 @@ def wait_for_next_state(directory: Path, player_number: int, before: dict, selec
             return None, "turn_ended"
         if action_settled(before, after, selected):
             return after, "action_settled"
-    return None, "action_not_confirmed_within_30_seconds"
+    return None, "action_not_confirmed_within_90_seconds"
 
 
 def main() -> None:
@@ -260,4 +266,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\nStopped by user.", file=sys.stderr)
+        raise SystemExit(130)
