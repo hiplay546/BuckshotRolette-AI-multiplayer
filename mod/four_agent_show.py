@@ -18,7 +18,7 @@ from send_local_command import submit_command
 
 API_URL = "https://openrouter.ai/api/v1/chat/completions"
 PHASE_GUIDANCE = {
-    "item_or_pickup": "Choose one item, its required second choice, or pick up the shotgun. Decide again after each result.",
+    "item_or_pickup": "Before picking up the shotgun, check every usable item and its effect. Use a tactically valuable item now; picking up the shotgun closes the item-use window for this turn. Do not waste an item without a benefit. If a secondary target or stolen item is pending, resolve it first. Decide again after each result.",
     "after_item_reaction": "Another player just used an item. React publicly or stay silent; you cannot act now.",
     "preliminary_aim": "Choose a visible preliminary target. This does not fire the shotgun; negotiations follow.",
     "first_negotiation": "The shooter has a preliminary target. React publicly or stay silent; you cannot act now.",
@@ -27,6 +27,18 @@ PHASE_GUIDANCE = {
     "shot_aftermath_target": "You were just shot at. React briefly to the actual result, including whether the shell was live or blank. You may speak publicly or stay silent. If you died, this is your final reaction.",
     "shot_aftermath_shooter": "Your shot just resolved, possibly against yourself. React briefly to the actual result. You may speak publicly or stay silent; no game action is available in this phase.",
     "shot_aftermath_observer": "You witnessed the shot. Write a brief private reaction. Prefer an empty public_speech unless you have a compelling reason to speak. No game action is available.",
+}
+ITEM_EFFECTS = {
+    1: "Handsaw: makes the next live shot deal 2 damage instead of 1; the benefit is lost on a blank.",
+    2: "Magnifier: privately reveals the current shell in the chamber.",
+    3: "Jammer: choose a living opponent to skip their next turn.",
+    4: "Cigarettes: restore 1 health only if below the health at the start of this round.",
+    5: "Beer: eject the current shell without firing; may end your turn if it was the last shell.",
+    6: "Burner phone: privately reveals a later shell, if enough shells remain.",
+    7: "Expired medicine: a risky health item; its outcome is not guaranteed.",
+    8: "Adrenaline: choose and immediately use one eligible opponent item.",
+    9: "Inverter: changes the current shell from live to blank or blank to live.",
+    10: "Indicator remote: reverses turn order.",
 }
 
 
@@ -97,6 +109,12 @@ class Show:
             "own_private_history": self.private[seat],
             "choices": [{"index": i, "label": option["label"]} for i, option in enumerate(options)],
         }
+        if phase == "item_or_pickup":
+            observation["usable_item_effects"] = [
+                {"slot": item["slot"], "name": item["name"], "effect": ITEM_EFFECTS.get(item["item_id"], "Effect unknown")}
+                for item in state.get("items", []) if item.get("usable")
+            ]
+            observation["item_window_closes_on_pickup"] = True
         if shot_context is not None:
             observation["just_resolved_shot"] = shot_context
         return observation
