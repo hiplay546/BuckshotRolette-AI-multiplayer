@@ -1,8 +1,14 @@
 diff --git a/src/loader.gd b/src/loader.gd
-index a38af08..1301b19 100644
+index a38af08..e22fb7d 100644
 --- a/src/loader.gd
 +++ b/src/loader.gd
-@@ -21,6 +21,7 @@ const MATCH_CUSTOMIZATION_SCRIPT := "res://multiplayer/scripts/global scripts/MP
+@@ -1,4 +1,5 @@
+ extends Node
++signal telemetry_event(event_type: String, data: Dictionary)
+ ## Buckshot Roulette - Local Splitscreen mod, core autoload ("SplitMod").
+ ##
+ ## Loaded through override.cfg before the main menu. It mounts splitscreen.pck, which holds
+@@ -21,6 +22,7 @@ const MATCH_CUSTOMIZATION_SCRIPT := "res://multiplayer/scripts/global scripts/MP
  const MAX_PLAYERS := 4
  const MIN_PLAYERS := 2
  const DEVICE_KBM := -1
@@ -10,7 +16,7 @@ index a38af08..1301b19 100644
  const FIRST_LOCAL_ID := 1001
  ## md5 of every original game file the pack replaces, filled in by the build. If the game
  ## gets updated and any of them changes, the pack is not mounted and the game runs unmodded.
-@@ -50,6 +51,8 @@ var customizing := false
+@@ -50,6 +52,8 @@ var customizing := false
  var lobby_message := ""
  var contexts : Array = []
  var _saved := {}
@@ -19,7 +25,7 @@ index a38af08..1301b19 100644
  
  
  func _init() -> void:
-@@ -93,6 +96,8 @@ func _renumber_players() -> void:
+@@ -93,6 +97,8 @@ func _renumber_players() -> void:
  func device_label(device: int) -> String:
  	if device == DEVICE_KBM:
  		return "KEYBOARD & MOUSE"
@@ -28,7 +34,7 @@ index a38af08..1301b19 100644
  	return "CONTROLLER %d" % (device + 1)
  
  ## Opens the multiplayer lobby scene straight on its match customization screen (see the MP_LobbyUI patch).
-@@ -131,6 +136,8 @@ func match_summary() -> Array:
+@@ -131,6 +137,8 @@ func match_summary() -> Array:
  func start_session() -> void:
  	if active or players.size() < MIN_PLAYERS:
  		return
@@ -37,7 +43,7 @@ index a38af08..1301b19 100644
  	contexts.clear()
  	for i in players.size():
  		var c := Ctx.new()
-@@ -257,6 +264,38 @@ func sid(node: Node) -> int:
+@@ -257,6 +265,39 @@ func sid(node: Node) -> int:
  	var c := ctx_of(node)
  	return c.user_id if c != null else GlobalSteam.STEAM_ID
  
@@ -72,16 +78,17 @@ index a38af08..1301b19 100644
 +		record["recipient_socket"] = recipient_socket
 +	file.store_line(JSON.stringify(record))
 +	file.close()
++	telemetry_event.emit(event_type, data)
 +
  ## Replaces GlobalVariables for values that belong to one local player.
  func gv(node: Node):
  	var c := ctx_of(node)
 diff --git a/src/pack/mods/splitscreen/command_bridge.gd b/src/pack/mods/splitscreen/command_bridge.gd
 new file mode 100644
-index 0000000..d2fa21e
+index 0000000..1ac44cc
 --- /dev/null
 +++ b/src/pack/mods/splitscreen/command_bridge.gd
-@@ -0,0 +1,140 @@
+@@ -0,0 +1,148 @@
 +extends Node
 +## Local manual command interface for player 1. Every action goes through the game's request path.
 +
@@ -89,6 +96,14 @@ index 0000000..d2fa21e
 +var seen_ids := {}
 +var aimed_socket := -1
 +var last_active_socket := -1
++var player_socket := -1
++
++func _ready() -> void:
++	SplitMod.telemetry_event.connect(_on_telemetry_event)
++
++func _on_telemetry_event(event_type: String, data: Dictionary) -> void:
++	if event_type == "aim_changed" and data.get("shooter_socket", -1) == player_socket:
++		aimed_socket = int(data.get("target_socket", -1))
 +
 +func _process(delta: float) -> void:
 +	elapsed += delta
@@ -103,6 +118,7 @@ index 0000000..d2fa21e
 +	if inter == null or inter.intermed_properties == null:
 +		return
 +	var player = inter.intermed_properties
++	player_socket = player.socket_number
 +	var active_socket: int = inter.game_state.MAIN_active_current_turn_socket
 +	if active_socket != last_active_socket:
 +		aimed_socket = -1
@@ -199,7 +215,6 @@ index 0000000..d2fa21e
 +			"direction_to_look": direction,
 +		}
 +		inter.packets.send_p2p_packet_directly_to_host(SplitMod.sid(player), packet)
-+		aimed_socket = target_socket
 +		return "request_sent"
 +	if aimed_socket != target_socket:
 +		return "target_not_aimed"
@@ -356,7 +371,7 @@ index 0000000..47271cc
 +			"round_index": game_state.MAIN_active_round_index,
 +	})
 diff --git a/tools/build.js b/tools/build.js
-index c3b598d..59ce08f 100644
+index c3b598d..bc2fe76 100644
 --- a/tools/build.js
 +++ b/tools/build.js
 @@ -88,6 +88,44 @@ func split_read_p2p_packet() -> void:
@@ -393,7 +408,7 @@ index c3b598d..59ce08f 100644
 +  ],
 +  'res://multiplayer/scripts/user scripts/MP_UserLook.gd': [
 +    ['\t\tLookAtDirection(direction_to_look)\n',
-+     '\t\tLookAtDirection(direction_to_look)\n\t\tif properties.is_holding_shotgun and direction_to_look in ["left", "forward", "right"]:\n\t\t\tSplitMod.telemetry_write(self, "aim_changed", {"shooter_socket": properties.socket_number, "target_socket": properties.GetSocketFromDirection(properties.socket_number, direction_to_look), "direction": direction_to_look})\n', 1],
++     '\t\tLookAtDirection(direction_to_look)\n\t\tif properties.is_holding_shotgun and direction_to_look in ["self", "left", "forward", "right"]:\n\t\t\tSplitMod.telemetry_write(self, "aim_changed", {"shooter_socket": properties.socket_number, "target_socket": properties.GetSocketFromDirection(properties.socket_number, direction_to_look), "direction": direction_to_look})\n', 1],
 +  ],
 +  'res://multiplayer/scripts/user scripts/MP_DeathManager.gd': [
 +    ['func UserDeath_EnterSpectatorMode():\n',

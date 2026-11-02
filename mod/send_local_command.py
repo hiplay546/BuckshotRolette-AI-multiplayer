@@ -13,12 +13,14 @@ from pathlib import Path
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("action", choices=("status", "pickup_shotgun", "aim", "shoot"))
-    parser.add_argument("target_socket", nargs="?", type=int)
+    parser.add_argument("target_player", nargs="?", type=int, help="player number shown in game (1-4)")
     args = parser.parse_args()
-    if (args.action in ("aim", "shoot")) != (args.target_socket is not None):
-        parser.error("aim and shoot require a target socket; pickup_shotgun does not")
-    if args.target_socket is not None and args.target_socket not in range(4):
-        parser.error("target_socket must be 0, 1, 2, or 3")
+    if args.action == "aim" and args.target_player is None:
+        parser.error("aim requires a player number (1-4)")
+    if args.action in ("status", "pickup_shotgun") and args.target_player is not None:
+        parser.error(f"{args.action} does not take a player number")
+    if args.target_player is not None and args.target_player not in range(1, 5):
+        parser.error("player number must be 1, 2, 3, or 4")
 
     appdata = os.environ.get("APPDATA")
     if not appdata:
@@ -41,6 +43,22 @@ def main() -> None:
         print(json.dumps(state, ensure_ascii=False, indent=2))
         return
 
+    target_socket = None
+    if args.target_player is not None:
+        target_name = f"PLAYER {args.target_player}"
+        target_socket = next(
+            (player["socket"] for player in state["players"] if player["name"] == target_name),
+            None,
+        )
+        if target_socket is None:
+            raise SystemExit(f"{target_name} is not in the current match")
+    elif args.action == "shoot":
+        target_socket = state.get("aimed_socket", -1)
+        if target_socket not in range(4):
+            raise SystemExit("No confirmed aim; run 'aim <player number>' first")
+    if args.action == "shoot" and state.get("aimed_socket") != target_socket:
+        raise SystemExit("Target differs from the last confirmed aim; aim again or run 'shoot' without a number")
+
     command_id = str(uuid.uuid4())
     command = {
         "command_id": command_id,
@@ -49,8 +67,8 @@ def main() -> None:
         "player_socket": state["player_socket"],
         "action": args.action,
     }
-    if args.target_socket is not None:
-        command["target_socket"] = args.target_socket
+    if target_socket is not None:
+        command["target_socket"] = target_socket
     temporary = directory / f"control-command.{command_id}.tmp"
     temporary.write_text(json.dumps(command, ensure_ascii=False), encoding="utf-8")
     temporary.replace(directory / "control-command.json")
@@ -65,6 +83,9 @@ def main() -> None:
                 except json.JSONDecodeError:
                     continue
                 if response.get("command_id") == command_id:
+                    if target_socket is not None:
+                        player_name = next((p["name"] for p in state["players"] if p["socket"] == target_socket), "unknown")
+                        print(f"Target: {player_name} (internal socket {target_socket})")
                     print(json.dumps(response, ensure_ascii=False))
                     return
         time.sleep(0.2)
