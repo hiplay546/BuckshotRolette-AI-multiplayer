@@ -85,25 +85,24 @@ index a38af08..e22fb7d 100644
  	var c := ctx_of(node)
 diff --git a/src/pack/mods/splitscreen/command_bridge.gd b/src/pack/mods/splitscreen/command_bridge.gd
 new file mode 100644
-index 0000000..21ae300
+index 0000000..1206115
 --- /dev/null
 +++ b/src/pack/mods/splitscreen/command_bridge.gd
-@@ -0,0 +1,232 @@
+@@ -0,0 +1,241 @@
 +extends Node
-+## Local manual command interface for player 1. Every action goes through the game's request path.
++## Local manual command interface for all four views. Every action uses the game's request path.
 +
 +var elapsed := 0.0
 +var seen_ids := {}
-+var aimed_socket := -1
-+var last_active_socket := -1
-+var player_socket := -1
++var aimed_sockets := {}
++var last_active_sockets := {}
 +
 +func _ready() -> void:
 +	SplitMod.telemetry_event.connect(_on_telemetry_event)
 +
 +func _on_telemetry_event(event_type: String, data: Dictionary) -> void:
-+	if event_type == "aim_changed" and data.get("shooter_socket", -1) == player_socket:
-+		aimed_socket = int(data.get("target_socket", -1))
++	if event_type == "aim_changed":
++		aimed_sockets[int(data.get("shooter_socket", -1))] = int(data.get("target_socket", -1))
 +
 +func _process(delta: float) -> void:
 +	elapsed += delta
@@ -113,18 +112,24 @@ index 0000000..21ae300
 +	var session = get_parent()
 +	if !SplitMod.active or !session.started or session.views.is_empty():
 +		return
-+	var root = session.views[0].vp.get_child(0)
++	var directory := ProjectSettings.globalize_path("user://modbucksot")
++	DirAccess.make_dir_recursive_absolute(directory)
++	for index in range(session.views.size()):
++		_process_view(session.views[index], index + 1, directory)
++
++func _process_view(view: Dictionary, player_number: int, directory: String) -> void:
++	if view.vp.get_child_count() == 0:
++		return
++	var root = view.vp.get_child(0)
 +	var inter = root.get_node_or_null("standalone managers/interactions/interaction intermediary")
 +	if inter == null or inter.intermed_properties == null:
 +		return
 +	var player = inter.intermed_properties
-+	player_socket = player.socket_number
 +	var active_socket: int = inter.game_state.MAIN_active_current_turn_socket
-+	if active_socket != last_active_socket:
-+		aimed_socket = -1
-+		last_active_socket = active_socket
-+	var directory := ProjectSettings.globalize_path("user://modbucksot")
-+	DirAccess.make_dir_recursive_absolute(directory)
++	if active_socket != int(last_active_sockets.get(player_number, -1)):
++		aimed_sockets.erase(player.socket_number)
++		last_active_sockets[player_number] = active_socket
++	var aimed_socket: int = int(aimed_sockets.get(player.socket_number, -1))
 +	var visible_players := []
 +	for participant in inter.instance_handler.instance_property_array:
 +		visible_players.append({"socket": participant.socket_number, "name": participant.user_name, "health": participant.health_current})
@@ -144,10 +149,11 @@ index 0000000..21ae300
 +				if item != null and item.get_child_count() > 1:
 +					var branch = item.get_child(1)
 +					stealable_items.append({"socket": participant.socket_number, "slot": slot_index + 1, "item_id": branch.item_id, "name": branch.itemName, "usable": branch.item_id != 8 and branch.interactionAllowed and !branch.interactionInvalid})
-+	_write_json(directory.path_join("control-state.json"), {
++	_write_json(directory.path_join("control-state-player-%d.json" % player_number), {
 +		"updated_utc": Time.get_datetime_string_from_system(true, true),
 +		"match_id": SplitMod.telemetry_match_id,
 +		"event_id": SplitMod.telemetry_event_id,
++		"player_number": player_number,
 +		"player_socket": player.socket_number,
 +		"active_socket": active_socket,
 +		"has_turn": player.has_turn,
@@ -163,7 +169,7 @@ index 0000000..21ae300
 +		"items": visible_items,
 +		"stealable_items": stealable_items,
 +	})
-+	var command_path := directory.path_join("control-command.json")
++	var command_path := directory.path_join("control-command-player-%d.json" % player_number)
 +	if !FileAccess.file_exists(command_path):
 +		return
 +	var parsed = JSON.parse_string(FileAccess.get_file_as_string(command_path))
@@ -174,15 +180,16 @@ index 0000000..21ae300
 +	if !(command_id is String) or command_id.is_empty() or seen_ids.has(command_id):
 +		return
 +	seen_ids[command_id] = true
-+	var result := _execute(command, inter, player)
++	var result := _execute(command, inter, player, player_number)
 +	var response := {
 +		"command_id": command_id,
 +		"match_id": SplitMod.telemetry_match_id,
++		"player_number": player_number,
 +		"accepted": result == "request_sent",
 +		"status": result,
 +		"timestamp_utc": Time.get_datetime_string_from_system(true, true),
 +	}
-+	_append_jsonl(directory.path_join("control-results.jsonl"), response)
++	_append_jsonl(directory.path_join("control-results-player-%d.jsonl" % player_number), response)
 +	DirAccess.remove_absolute(command_path)
 +	print("[modbucksot control] ", response)
 +
@@ -195,7 +202,7 @@ index 0000000..21ae300
 +func _can_use_item(inter, player) -> bool:
 +	return player.socket_number == inter.game_state.MAIN_active_current_turn_socket and player.has_turn and player.major_permission_enabled and !player.is_holding_shotgun and !player.is_interacting_with_item and !player.is_on_secondary_interaction and !player.is_grabbing_items and player.health_current > 0
 +
-+func _execute(command: Dictionary, inter, player) -> String:
++func _execute(command: Dictionary, inter, player, player_number: int) -> String:
 +	if command.get("match_id", "") != SplitMod.telemetry_match_id:
 +		return "stale_match"
 +	var expected = command.get("expected_event_id", null)
@@ -203,6 +210,8 @@ index 0000000..21ae300
 +		return "stale_observation"
 +	var requested_socket = command.get("player_socket", null)
 +	if !(requested_socket is int or requested_socket is float) or int(requested_socket) != player.socket_number:
++		return "wrong_player"
++	if command.get("player_number", -1) != player_number:
 +		return "wrong_player"
 +	var action = command.get("action", "")
 +	if !(action is String):
@@ -291,10 +300,10 @@ index 0000000..21ae300
 +		}
 +		inter.packets.send_p2p_packet_directly_to_host(SplitMod.sid(player), packet)
 +		return "request_sent"
-+	if aimed_socket != target_socket:
++	if int(aimed_sockets.get(player.socket_number, -1)) != target_socket:
 +		return "target_not_aimed"
 +	player.shotgun.Shoot(null, target_socket)
-+	aimed_socket = -1
++	aimed_sockets.erase(player.socket_number)
 +	return "request_sent"
 +
 +func _target_socket(command: Dictionary, player) -> int:

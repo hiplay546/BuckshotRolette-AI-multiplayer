@@ -12,6 +12,8 @@ from pathlib import Path
 
 def main() -> None:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--player", type=int, choices=range(1, 5), default=1,
+                        help="local seat to control (1-4; default: 1)")
     parser.add_argument("action", choices=("status", "use_item", "pickup_shotgun", "aim", "shoot", "jammer_target", "steal_item"))
     parser.add_argument("number", nargs="?", type=int, help="item slot (1-8) or player number (1-4)")
     parser.add_argument("item_slot", nargs="?", type=int, help="opponent item slot for steal_item (1-8)")
@@ -35,7 +37,7 @@ def main() -> None:
     if not appdata:
         raise SystemExit("APPDATA is not set")
     directory = Path(appdata) / "BuckshotSplitTest" / "modbucksot"
-    state_path = directory / "control-state.json"
+    state_path = directory / f"control-state-player-{args.player}.json"
     try:
         state = json.loads(state_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -47,6 +49,8 @@ def main() -> None:
     age = datetime.now(timezone.utc) - datetime.fromisoformat(updated).replace(tzinfo=timezone.utc)
     if age.total_seconds() > 10:
         raise SystemExit("Match state is stale; start or resume the game")
+    if state.get("player_number") != args.player:
+        raise SystemExit("State belongs to a different local player")
 
     if args.action == "status":
         print(json.dumps(state, ensure_ascii=False, indent=2))
@@ -74,6 +78,7 @@ def main() -> None:
         "match_id": state["match_id"],
         "expected_event_id": state["event_id"],
         "player_socket": state["player_socket"],
+        "player_number": args.player,
         "action": args.action,
     }
     if target_socket is not None:
@@ -82,11 +87,11 @@ def main() -> None:
         command["item_slot"] = args.number
     if args.action == "steal_item":
         command["item_slot"] = args.item_slot
-    temporary = directory / f"control-command.{command_id}.tmp"
+    temporary = directory / f"control-command-player-{args.player}.{command_id}.tmp"
     temporary.write_text(json.dumps(command, ensure_ascii=False), encoding="utf-8")
-    temporary.replace(directory / "control-command.json")
+    temporary.replace(directory / f"control-command-player-{args.player}.json")
 
-    results = directory / "control-results.jsonl"
+    results = directory / f"control-results-player-{args.player}.jsonl"
     deadline = time.monotonic() + 10
     while time.monotonic() < deadline:
         if results.exists():
