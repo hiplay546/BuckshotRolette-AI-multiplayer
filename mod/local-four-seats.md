@@ -46,11 +46,12 @@ From the project root, while that player has the turn:
 
 ```powershell
 py mod/send_local_command.py status
+py mod/send_local_command.py use_item 1
 py mod/send_local_command.py pickup_shotgun
 py mod/send_local_command.py aim 2
 py mod/send_local_command.py shoot
 ```
 
-`status` shows the current player-to-socket mapping. Numbers in `aim` and optional `shoot` mean the visible player number, 1 to 4. `shoot` without a number uses the last game-confirmed aim. The bridge checks the game phase, turn, health, target, match ID, and event ID before calling the game's request methods. Reused command IDs are ignored. A `request_sent` response means the command was submitted; confirm the effect in `events.jsonl` and on screen. No LLM is connected.
+`status` shows the current player-to-socket mapping and the first player's item slots. `use_item 1` applies the item in slot 1; the bridge rejects unavailable items and items requiring a second choice, such as the jammer and adrenaline. Use one item command at a time. After `item_used`, wait until `status` shows `can_use_item: true` or `can_pickup: true` before deciding again; this lets the animation and permission change finish. Numbers in `aim` and optional `shoot` mean the visible player number, 1 to 4. `shoot` without a number uses the last game-confirmed aim. The bridge checks the game phase, turn, health, target, match ID, and event ID before calling the game's request methods. Reused command IDs are ignored. A `request_sent` response means the command was submitted; confirm the effect in `events.jsonl` and on screen. No LLM is connected.
 
 A four-view headless smoke test loaded the bridge and produced `control-state.json`. An `aim` request during item distribution was rejected as `shotgun_not_ready`, with no shot. Pickup, aim, and shoot still require a manual in-game command test.

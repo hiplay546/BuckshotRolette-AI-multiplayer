@@ -85,10 +85,10 @@ index a38af08..e22fb7d 100644
  	var c := ctx_of(node)
 diff --git a/src/pack/mods/splitscreen/command_bridge.gd b/src/pack/mods/splitscreen/command_bridge.gd
 new file mode 100644
-index 0000000..1ac44cc
+index 0000000..6d51add
 --- /dev/null
 +++ b/src/pack/mods/splitscreen/command_bridge.gd
-@@ -0,0 +1,148 @@
+@@ -0,0 +1,178 @@
 +extends Node
 +## Local manual command interface for player 1. Every action goes through the game's request path.
 +
@@ -128,6 +128,12 @@ index 0000000..1ac44cc
 +	var visible_players := []
 +	for participant in inter.instance_handler.instance_property_array:
 +		visible_players.append({"socket": participant.socket_number, "name": participant.user_name, "health": participant.health_current})
++	var visible_items := []
++	for slot_index in range(player.user_inventory_instance_array.size()):
++		var item = player.user_inventory_instance_array[slot_index]
++		if item != null and item.get_child_count() > 1:
++			var branch = item.get_child(1)
++			visible_items.append({"slot": slot_index + 1, "item_id": branch.item_id, "name": branch.itemName, "usable": _can_use_item(inter, player) and branch.interactionAllowed and !branch.interactionInvalid and !branch.has_secondary_interaction, "needs_second_choice": branch.has_secondary_interaction})
 +	_write_json(directory.path_join("control-state.json"), {
 +		"updated_utc": Time.get_datetime_string_from_system(true, true),
 +		"match_id": SplitMod.telemetry_match_id,
@@ -138,9 +144,11 @@ index 0000000..1ac44cc
 +		"holding_shotgun": player.is_holding_shotgun,
 +		"aimed_socket": aimed_socket,
 +		"can_pickup": _can_pickup(inter, player),
++		"can_use_item": _can_use_item(inter, player),
 +		"can_aim": _can_aim(inter, player),
 +		"can_shoot": _can_aim(inter, player) and aimed_socket >= 0,
 +		"players": visible_players,
++		"items": visible_items,
 +	})
 +	var command_path := directory.path_join("control-command.json")
 +	if !FileAccess.file_exists(command_path):
@@ -171,6 +179,9 @@ index 0000000..1ac44cc
 +func _can_aim(inter, player) -> bool:
 +	return player.socket_number == inter.game_state.MAIN_active_current_turn_socket and player.is_holding_shotgun and player.look_manager.checking and player.health_current > 0
 +
++func _can_use_item(inter, player) -> bool:
++	return player.socket_number == inter.game_state.MAIN_active_current_turn_socket and player.has_turn and player.major_permission_enabled and !player.is_holding_shotgun and !player.is_interacting_with_item and !player.is_on_secondary_interaction and !player.is_grabbing_items and player.health_current > 0
++
 +func _execute(command: Dictionary, inter, player) -> String:
 +	if command.get("match_id", "") != SplitMod.telemetry_match_id:
 +		return "stale_match"
@@ -187,6 +198,25 @@ index 0000000..1ac44cc
 +		if !_can_pickup(inter, player):
 +			return "pickup_not_allowed"
 +		player.shotgun.PickupShotgun()
++		return "request_sent"
++	if action == "use_item":
++		if !_can_use_item(inter, player):
++			return "item_phase_not_ready"
++		var slot_value = command.get("item_slot", null)
++		if !(slot_value is int or slot_value is float):
++			return "invalid_item_slot"
++		var slot_index := int(slot_value) - 1
++		if slot_index < 0 or slot_index >= player.user_inventory_instance_array.size() or float(slot_value) != float(slot_index + 1):
++			return "invalid_item_slot"
++		var item = player.user_inventory_instance_array[slot_index]
++		if item == null or item.get_child_count() < 2:
++			return "item_missing"
++		var branch = item.get_child(1)
++		if branch.has_secondary_interaction:
++			return "item_needs_second_choice"
++		if !branch.interactionAllowed or branch.interactionInvalid:
++			return "item_not_allowed"
++		player.item_interaction.InteractWithItemRequest(item)
 +		return "request_sent"
 +	if action != "aim" and action != "shoot":
 +		return "invalid_action"
