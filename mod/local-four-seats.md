@@ -32,7 +32,7 @@ A full four-player match and keyboard switching during graphical play were confi
 
 ## Passive event log
 
-The test build has a host-only JSONL logger at `%APPDATA%/BuckshotSplitTest/modbucksot/events.jsonl`. It records `round_started`, `turn_changed`, `item_used`, `shotgun_picked_up`, `aim_changed`, `shot_target_confirmed`, `shot_resolved`, `health_changed`, `player_spectating`, `player_revived`, and `game_concluded`. Each row has `match_id`, `event_id`, and UTC time. `aim_changed` is the observed look direction while holding the shotgun; `shot_target_confirmed` is the target accepted with the shot packet, not a separate pre-shot commitment. A zero health value is recorded as such, without assuming permanent elimination across rounds.
+The test build has a host-only JSONL logger at `%APPDATA%/BuckshotSplitTest/modbucksot/events.jsonl`. It records `round_started`, `turn_changed`, `item_used`, `shotgun_picked_up`, `aim_changed`, `shot_target_confirmed`, `shot_resolved`, `health_changed`, `player_spectating`, `player_recovered`, and `game_concluded`. Each row has `match_id`, `event_id`, and UTC time. `aim_changed` is the observed look direction while holding the shotgun; `shot_target_confirmed` is the target accepted with the shot packet, not a separate pre-shot commitment. A zero health value is recorded as such, without assuming permanent elimination across rounds.
 
 The magnifying glass also creates `item_private_result` with `visibility: private` and `recipient_socket` set to its owner. The orchestrator must filter that row from every other player's observation. The JSONL file itself is a viewer/development log and is not a player-facing feed.
 

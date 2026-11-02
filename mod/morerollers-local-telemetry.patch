@@ -371,7 +371,7 @@ index 0000000..47271cc
 +			"round_index": game_state.MAIN_active_round_index,
 +	})
 diff --git a/tools/build.js b/tools/build.js
-index c3b598d..bc2fe76 100644
+index c3b598d..fd53e33 100644
 --- a/tools/build.js
 +++ b/tools/build.js
 @@ -88,6 +88,44 @@ func split_read_p2p_packet() -> void:
@@ -399,7 +399,7 @@ index c3b598d..bc2fe76 100644
 +    ['\t\tproperties.is_holding_shotgun = true\n',
 +     '\t\tproperties.is_holding_shotgun = true\n\t\tSplitMod.telemetry_write(self, "shotgun_picked_up", {"socket": properties.socket_number})\n', 1],
 +    ['\tactive_shooter_socket_target = packet_dictionary.shooter_socket_target\n',
-+     '\tactive_shooter_socket_target = packet_dictionary.shooter_socket_target\n\tSplitMod.telemetry_write(self, "shot_target_confirmed", {"shooter_socket": packet_dictionary.shooter_socket_self, "target_socket": packet_dictionary.shooter_socket_target})\n', 1],
++     '\tactive_shooter_socket_target = packet_dictionary.shooter_socket_target\n\tif properties.socket_number == packet_dictionary.shooter_socket_self:\n\t\tSplitMod.telemetry_write(self, "shot_target_confirmed", {"shooter_socket": packet_dictionary.shooter_socket_self, "target_socket": packet_dictionary.shooter_socket_target})\n', 1],
 +    ['\tvar current_shell = intermediary.game_state.MAIN_shooter_shell\n',
 +     '\tvar current_shell = intermediary.game_state.MAIN_shooter_shell\n\tvar telemetry_target_health_before: int = TelemetryTargetHealth()\n', 1],
 +    ['\tCheckIfFinalShot()\n\nfunc CheckIfFinalShot():',
@@ -414,7 +414,7 @@ index c3b598d..bc2fe76 100644
 +    ['func UserDeath_EnterSpectatorMode():\n',
 +     'func UserDeath_EnterSpectatorMode():\n\tSplitMod.telemetry_write(self, "player_spectating", {"socket": properties.socket_number, "health": properties.health_current})\n', 1],
 +    ['\tproperties.is_spectating = false\n',
-+     '\tproperties.is_spectating = false\n\tSplitMod.telemetry_write(self, "player_revived", {"socket": properties.socket_number, "health": properties.health_current})\n', 1],
++     '\tproperties.is_spectating = false\n\tSplitMod.telemetry_write(self, "player_recovered", {"socket": properties.socket_number, "health": properties.health_current})\n', 1],
 +  ],
    'res://multiplayer/scripts/global scripts/MP_InteractionIntermediary.gd': [
      ['\tget_tree().change_scene_to_file("res://multiplayer/scenes/mp_lobby.tscn")', '\tSplitMod.change_scene(self, "res://multiplayer/scenes/mp_lobby.tscn")', 1],
