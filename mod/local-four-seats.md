@@ -36,4 +36,21 @@ The test build has a host-only JSONL logger at `%APPDATA%/BuckshotSplitTest/modb
 
 The magnifying glass also creates `item_private_result` with `visibility: private` and `recipient_socket` set to its owner. The orchestrator must filter that row from every other player's observation. The JSONL file itself is a viewer/development log and is not a player-facing feed.
 
-The user verified a four-player manual match, and the resulting JSONL had unique host-only `turn_changed`, `item_used`, and `shot_resolved` rows with sequential event IDs. A four-view headless smoke test also wrote one `round_started` row without script errors. The other newly added event types still need a manual-match check against the screen. The existing game does not provide a pause between aim and shoot; the two-round negotiation flow will need a separate safe control interface later.
+The user verified a four-player manual match, and the resulting JSONL had unique host-only `turn_changed`, `item_used`, and `shot_resolved` rows with sequential event IDs. A four-view headless smoke test also wrote one `round_started` row without script errors. The other newly added event types still need a manual-match check against the screen. The manual command bridge below separates aim and shoot for one seat; the game's turn timer still runs, so the negotiation flow needs a verified pause mechanism.
+
+## One-seat manual command bridge
+
+The current build reads one JSON command at a time from `%APPDATA%/BuckshotSplitTest/modbucksot/control-command.json`. It writes current state to `control-state.json` and responses to `control-results.jsonl`. `mod/send_local_command.py` writes commands atomically and supplies the current match ID, event ID, and player socket. It controls only the first joined player's local copy; that player's socket can change between matches.
+
+From the project root, while that player has the turn:
+
+```powershell
+py mod/send_local_command.py status
+py mod/send_local_command.py pickup_shotgun
+py mod/send_local_command.py aim 2
+py mod/send_local_command.py shoot 2
+```
+
+`status` shows the current player-to-socket mapping. The target is a socket number from 0 to 3. `shoot` requires a prior `aim` for the same target. The bridge checks the game phase, turn, health, target, match ID, and event ID before calling the game's request methods. Reused command IDs are ignored. A `request_sent` response means the command was submitted; confirm the effect in `events.jsonl` and on screen. No LLM is connected.
+
+A four-view headless smoke test loaded the bridge and produced `control-state.json`. An `aim` request during item distribution was rejected as `shotgun_not_ready`, with no shot. Pickup, aim, and shoot still require a manual in-game command test.

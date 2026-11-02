@@ -76,6 +76,152 @@ index a38af08..1301b19 100644
  ## Replaces GlobalVariables for values that belong to one local player.
  func gv(node: Node):
  	var c := ctx_of(node)
+diff --git a/src/pack/mods/splitscreen/command_bridge.gd b/src/pack/mods/splitscreen/command_bridge.gd
+new file mode 100644
+index 0000000..d2fa21e
+--- /dev/null
++++ b/src/pack/mods/splitscreen/command_bridge.gd
+@@ -0,0 +1,140 @@
++extends Node
++## Local manual command interface for player 1. Every action goes through the game's request path.
++
++var elapsed := 0.0
++var seen_ids := {}
++var aimed_socket := -1
++var last_active_socket := -1
++
++func _process(delta: float) -> void:
++	elapsed += delta
++	if elapsed < 0.2:
++		return
++	elapsed = 0.0
++	var session = get_parent()
++	if !SplitMod.active or !session.started or session.views.is_empty():
++		return
++	var root = session.views[0].vp.get_child(0)
++	var inter = root.get_node_or_null("standalone managers/interactions/interaction intermediary")
++	if inter == null or inter.intermed_properties == null:
++		return
++	var player = inter.intermed_properties
++	var active_socket: int = inter.game_state.MAIN_active_current_turn_socket
++	if active_socket != last_active_socket:
++		aimed_socket = -1
++		last_active_socket = active_socket
++	var directory := ProjectSettings.globalize_path("user://modbucksot")
++	DirAccess.make_dir_recursive_absolute(directory)
++	var visible_players := []
++	for participant in inter.instance_handler.instance_property_array:
++		visible_players.append({"socket": participant.socket_number, "name": participant.user_name, "health": participant.health_current})
++	_write_json(directory.path_join("control-state.json"), {
++		"updated_utc": Time.get_datetime_string_from_system(true, true),
++		"match_id": SplitMod.telemetry_match_id,
++		"event_id": SplitMod.telemetry_event_id,
++		"player_socket": player.socket_number,
++		"active_socket": active_socket,
++		"has_turn": player.has_turn,
++		"holding_shotgun": player.is_holding_shotgun,
++		"aimed_socket": aimed_socket,
++		"can_pickup": _can_pickup(inter, player),
++		"can_aim": _can_aim(inter, player),
++		"can_shoot": _can_aim(inter, player) and aimed_socket >= 0,
++		"players": visible_players,
++	})
++	var command_path := directory.path_join("control-command.json")
++	if !FileAccess.file_exists(command_path):
++		return
++	var parsed = JSON.parse_string(FileAccess.get_file_as_string(command_path))
++	if !(parsed is Dictionary):
++		return
++	var command: Dictionary = parsed
++	var command_id = command.get("command_id", "")
++	if !(command_id is String) or command_id.is_empty() or seen_ids.has(command_id):
++		return
++	seen_ids[command_id] = true
++	var result := _execute(command, inter, player)
++	var response := {
++		"command_id": command_id,
++		"match_id": SplitMod.telemetry_match_id,
++		"accepted": result == "request_sent",
++		"status": result,
++		"timestamp_utc": Time.get_datetime_string_from_system(true, true),
++	}
++	_append_jsonl(directory.path_join("control-results.jsonl"), response)
++	DirAccess.remove_absolute(command_path)
++	print("[modbucksot control] ", response)
++
++func _can_pickup(inter, player) -> bool:
++	return player.socket_number == inter.game_state.MAIN_active_current_turn_socket and player.has_turn and player.major_permission_enabled and !player.is_holding_shotgun and inter.intbranch_shotgun.interactionAllowed
++
++func _can_aim(inter, player) -> bool:
++	return player.socket_number == inter.game_state.MAIN_active_current_turn_socket and player.is_holding_shotgun and player.look_manager.checking and player.health_current > 0
++
++func _execute(command: Dictionary, inter, player) -> String:
++	if command.get("match_id", "") != SplitMod.telemetry_match_id:
++		return "stale_match"
++	var expected = command.get("expected_event_id", null)
++	if !(expected is int or expected is float) or int(expected) != SplitMod.telemetry_event_id:
++		return "stale_observation"
++	var requested_socket = command.get("player_socket", null)
++	if !(requested_socket is int or requested_socket is float) or int(requested_socket) != player.socket_number:
++		return "wrong_player"
++	var action = command.get("action", "")
++	if !(action is String):
++		return "invalid_action"
++	if action == "pickup_shotgun":
++		if !_can_pickup(inter, player):
++			return "pickup_not_allowed"
++		player.shotgun.PickupShotgun()
++		return "request_sent"
++	if action != "aim" and action != "shoot":
++		return "invalid_action"
++	if !_can_aim(inter, player):
++		return "shotgun_not_ready"
++	var target_value = command.get("target_socket", null)
++	if !(target_value is int or target_value is float):
++		return "invalid_target"
++	var target_socket := int(target_value)
++	if target_socket < 0 or target_socket > 3 or float(target_value) != float(target_socket):
++		return "invalid_target"
++	var target = player.GetSocketProperties(target_socket)
++	if target == null or target.health_current <= 0:
++		return "target_unavailable"
++	if action == "aim":
++		var direction: String = player.GetDirection(player.socket_number, target_socket)
++		if direction == "":
++			return "invalid_target"
++		player.look_manager.LookAtDirection(direction)
++		var packet := {
++			"packet category": "MP_PacketVerification",
++			"packet alias": "look at user request",
++			"sent_from": "client",
++			"packet_id": 15,
++			"sent_from_socket": player.socket_number,
++			"direction_to_look": direction,
++		}
++		inter.packets.send_p2p_packet_directly_to_host(SplitMod.sid(player), packet)
++		aimed_socket = target_socket
++		return "request_sent"
++	if aimed_socket != target_socket:
++		return "target_not_aimed"
++	player.shotgun.Shoot(null, target_socket)
++	aimed_socket = -1
++	return "request_sent"
++
++func _write_json(path: String, data: Dictionary) -> void:
++	var file := FileAccess.open(path, FileAccess.WRITE)
++	if file == null:
++		return
++	file.store_string(JSON.stringify(data))
++	file.close()
++
++func _append_jsonl(path: String, data: Dictionary) -> void:
++	var mode := FileAccess.READ_WRITE if FileAccess.file_exists(path) else FileAccess.WRITE
++	var file := FileAccess.open(path, mode)
++	if file == null:
++		return
++	file.seek_end()
++	file.store_line(JSON.stringify(data))
++	file.close()
 diff --git a/src/pack/mods/splitscreen/split_lobby.gd b/src/pack/mods/splitscreen/split_lobby.gd
 index a0ad76b..b75609f 100644
 --- a/src/pack/mods/splitscreen/split_lobby.gd
@@ -120,10 +266,19 @@ index a0ad76b..b75609f 100644
  
  func _on_joy_connection_changed(device: int, connected: bool) -> void:
 diff --git a/src/pack/mods/splitscreen/split_session.gd b/src/pack/mods/splitscreen/split_session.gd
-index d873bc9..f3f0795 100644
+index d873bc9..f2f92db 100644
 --- a/src/pack/mods/splitscreen/split_session.gd
 +++ b/src/pack/mods/splitscreen/split_session.gd
-@@ -192,7 +192,7 @@ func _add_view(c, packed: PackedScene) -> void:
+@@ -76,6 +76,8 @@ func _ready() -> void:
+ 	Input.joy_connection_changed.connect(_on_joy_connection_changed)
+ 	started = true
+ 	_layout()
++	var command_bridge: Node = load("res://mods/splitscreen/command_bridge.gd").new()
++	add_child(command_bridge)
+ 	# Tags that had to go on top of a view (no letterbox room) fade out after a few seconds.
+ 	for v in views:
+ 		if v.tag_overlaps_view:
+@@ -192,7 +194,7 @@ func _add_view(c, packed: PackedScene) -> void:
  	add_child(tag)
  	var warning := _make_label("CONTROLLER DISCONNECTED\nRECONNECT IT TO KEEP PLAYING", 22)
  	warning.add_theme_color_override("font_color", Color(1, 0.4, 0.4))
@@ -132,7 +287,7 @@ index d873bc9..f3f0795 100644
  	add_child(warning)
  
  	var instance := packed.instantiate()
-@@ -296,6 +296,16 @@ func _input(event: InputEvent) -> void:
+@@ -296,6 +298,16 @@ func _input(event: InputEvent) -> void:
  	if !started:
  		get_viewport().set_input_as_handled()
  		return
