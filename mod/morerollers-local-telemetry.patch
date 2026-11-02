@@ -85,7 +85,7 @@ index a38af08..e22fb7d 100644
  	var c := ctx_of(node)
 diff --git a/src/pack/mods/splitscreen/command_bridge.gd b/src/pack/mods/splitscreen/command_bridge.gd
 new file mode 100644
-index 0000000..1206115
+index 0000000..d1e638e
 --- /dev/null
 +++ b/src/pack/mods/splitscreen/command_bridge.gd
 @@ -0,0 +1,241 @@
@@ -132,7 +132,7 @@ index 0000000..1206115
 +	var aimed_socket: int = int(aimed_sockets.get(player.socket_number, -1))
 +	var visible_players := []
 +	for participant in inter.instance_handler.instance_property_array:
-+		visible_players.append({"socket": participant.socket_number, "name": participant.user_name, "health": participant.health_current})
++		visible_players.append({"socket": participant.socket_number, "name": participant.user_name, "health": participant.health_current, "is_jammed": participant.is_jammed})
 +	var visible_items := []
 +	for slot_index in range(player.user_inventory_instance_array.size()):
 +		var item = player.user_inventory_instance_array[slot_index]

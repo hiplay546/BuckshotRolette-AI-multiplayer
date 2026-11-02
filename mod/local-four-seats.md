@@ -58,3 +58,22 @@ py mod/send_local_command.py shoot
 `status` shows that seat's player-to-socket mapping, item slots, `secondary_choice`, `stealable_items`, and `timeouts_enabled`. `use_item 1` applies the item in slot 1. If it is a jammer, wait for `secondary_choice: jammer_target`, then run `jammer_target <player number>`. If it is adrenaline, wait for `secondary_choice: steal_item`, inspect `stealable_items`, then run `steal_item <player number> <opponent item slot>`. Use one item command at a time. After `item_used`, wait until `status` shows `can_use_item: true` or `can_pickup: true` before deciding again; this lets the animation and permission change finish. Numbers in `aim`, optional `shoot`, `jammer_target`, and `steal_item` mean the visible player number, 1 to 4. `shoot` without a number uses the last game-confirmed aim. The bridge checks the game phase, turn, health, target, match ID, event ID, and local seat before calling the game's request methods. Reused command IDs are ignored. A `request_sent` response means the command was submitted; confirm the effect in `events.jsonl` and on screen. No LLM is connected.
 
 A four-view headless smoke test loaded the bridge. The user manually verified pickup, aim, shoot, one-step items, adrenaline, stolen item use, and jammer selection for the first seat. The other seats still need a manual in-game command test.
+
+## First OpenRouter agent
+
+`mod/openrouter_agent.py` asks one model for one action. It sends the selected seat's current state, up to 20 recent events filtered for that seat, and a numbered list of available actions. The model returns an index; the script sends only that listed action against the original match ID and event ID. If the game advances during the API request, the bridge rejects the stale action. There is no automatic loop yet.
+
+In a PowerShell session, set the API key without putting its value in shell history:
+
+```powershell
+$env:OPENROUTER_API_KEY = [System.Net.NetworkCredential]::new('', (Read-Host 'OpenRouter API key' -AsSecureString)).Password
+```
+
+While the selected player can act, inspect the exact observation without spending tokens, then request one decision:
+
+```powershell
+py mod/openrouter_agent.py --player 2 --preview
+py mod/openrouter_agent.py --player 2
+```
+
+The default model is `deepseek/deepseek-v4-flash-0731`. Pass `--model <OpenRouter model slug>` to use another. The script reads `OPENROUTER_API_KEY` from the environment; it does not save the key to a file or include it in the model prompt.

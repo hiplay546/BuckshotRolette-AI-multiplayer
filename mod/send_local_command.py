@@ -10,6 +10,43 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
+def submit_command(
+    directory: Path, state: dict, player_number: int, action: str,
+    target_socket: int | None = None, item_slot: int | None = None,
+) -> dict:
+    """Submit against the observed match/event, then wait for this command's result."""
+    command_id = str(uuid.uuid4())
+    command = {
+        "command_id": command_id,
+        "match_id": state["match_id"],
+        "expected_event_id": state["event_id"],
+        "player_socket": state["player_socket"],
+        "player_number": player_number,
+        "action": action,
+    }
+    if target_socket is not None:
+        command["target_socket"] = target_socket
+    if item_slot is not None:
+        command["item_slot"] = item_slot
+    temporary = directory / f"control-command-player-{player_number}.{command_id}.tmp"
+    temporary.write_text(json.dumps(command, ensure_ascii=False), encoding="utf-8")
+    temporary.replace(directory / f"control-command-player-{player_number}.json")
+
+    results = directory / f"control-results-player-{player_number}.jsonl"
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        if results.exists():
+            for line in reversed(results.read_text(encoding="utf-8").splitlines()):
+                try:
+                    response = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if response.get("command_id") == command_id:
+                    return response
+        time.sleep(0.2)
+    raise SystemExit(f"No response for command {command_id} within 10 seconds")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--player", type=int, choices=range(1, 5), default=1,
@@ -72,42 +109,12 @@ def main() -> None:
     if args.action == "shoot" and state.get("aimed_socket") != target_socket:
         raise SystemExit("Target differs from the last confirmed aim; aim again or run 'shoot' without a number")
 
-    command_id = str(uuid.uuid4())
-    command = {
-        "command_id": command_id,
-        "match_id": state["match_id"],
-        "expected_event_id": state["event_id"],
-        "player_socket": state["player_socket"],
-        "player_number": args.player,
-        "action": args.action,
-    }
+    item_slot = args.number if args.action == "use_item" else args.item_slot
+    response = submit_command(directory, state, args.player, args.action, target_socket, item_slot)
     if target_socket is not None:
-        command["target_socket"] = target_socket
-    if args.action == "use_item":
-        command["item_slot"] = args.number
-    if args.action == "steal_item":
-        command["item_slot"] = args.item_slot
-    temporary = directory / f"control-command-player-{args.player}.{command_id}.tmp"
-    temporary.write_text(json.dumps(command, ensure_ascii=False), encoding="utf-8")
-    temporary.replace(directory / f"control-command-player-{args.player}.json")
-
-    results = directory / f"control-results-player-{args.player}.jsonl"
-    deadline = time.monotonic() + 10
-    while time.monotonic() < deadline:
-        if results.exists():
-            for line in reversed(results.read_text(encoding="utf-8").splitlines()):
-                try:
-                    response = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if response.get("command_id") == command_id:
-                    if target_socket is not None:
-                        player_name = next((p["name"] for p in state["players"] if p["socket"] == target_socket), "unknown")
-                        print(f"Target: {player_name} (internal socket {target_socket})")
-                    print(json.dumps(response, ensure_ascii=False))
-                    return
-        time.sleep(0.2)
-    raise SystemExit(f"No response for command {command_id} within 10 seconds")
+        player_name = next((p["name"] for p in state["players"] if p["socket"] == target_socket), "unknown")
+        print(f"Target: {player_name} (internal socket {target_socket})")
+    print(json.dumps(response, ensure_ascii=False))
 
 
 if __name__ == "__main__":
