@@ -18,8 +18,7 @@ The four seats are local copies of the game's multiplayer scene. Switching input
 Clone the upstream commit into `tools/MoreRollers`, then from that directory:
 
 ```powershell
-git apply ..\..\mod\morerollers-keyboard-seats.patch
-git apply ..\..\mod\morerollers-turn-telemetry.patch
+git apply ..\..\mod\morerollers-local-telemetry.patch
 node tools/build.js "C:\Users\Daniil\Desktop\modbucksot\work\game-v2.2.0\Buckshot Roulette.exe"
 ```
 
@@ -29,10 +28,10 @@ Copy `mod/loader.gd` and `mod/splitscreen.pck` from the MoreRollers checkout int
 
 A headless smoke test loaded the mod, filled the lobby through its F4 handler with devices `[-1, -2, -3, -4]`, started a match, and observed `split_session` with four views and `started=true` in `%APPDATA%/BuckshotSplitTest/logs/godot.log`.
 
-A full four-player match and keyboard switching during graphical play were confirmed by the user. The host-only telemetry patch still requires a manual turn transition to verify its JSONL output.
+A full four-player match and keyboard switching during graphical play were confirmed by the user. Host-only turn telemetry was verified during that match.
 
-## Passive turn log
+## Passive event log
 
-The current test build also has a host-only `turn_changed` logger. After a real turn transition, check `%APPDATA%/BuckshotSplitTest/modbucksot/events.jsonl`. Each row has `match_id`, `event_id`, UTC time, old and new socket, and round index. The four local views must produce one row per host-confirmed transition.
+The test build has a host-only JSONL logger at `%APPDATA%/BuckshotSplitTest/modbucksot/events.jsonl`. It records `turn_changed`, `item_used`, and `shot_resolved`. Each row has `match_id`, `event_id`, and UTC time. Item events contain the user socket and item ID; shot events contain shooter, target, live/blank result, damage, and the target's remaining health. A zero health value is recorded as such, without assuming final elimination.
 
-The headless four-seat test did not progress through a manual turn, so no event row has been verified yet. Item, shotgun, health, and elimination telemetry remain to be added after the turn log is checked in a manual match.
+Ten `turn_changed` rows were verified in a real four-player manual match, without duplicates from the four views. The item and shot loggers load without script errors, but the headless automation could not advance past item distribution. Their rows need a manual-match check. Private item results, shotgun pickup and aiming, health changes from items, and final elimination still need separate telemetry.
