@@ -24,6 +24,9 @@ PHASE_GUIDANCE = {
     "first_negotiation": "The shooter has a preliminary target. React publicly or stay silent; you cannot act now.",
     "final_target": "You are the shooter speaking last in the first negotiation. Choose your FINAL target now; it will be locked before the final round of speech.",
     "final_negotiation": "The target is locked. Speak or stay silent; no action or target change is allowed.",
+    "shot_aftermath_target": "You were just shot at. React briefly to the actual result, including whether the shell was live or blank. You may speak publicly or stay silent. If you died, this is your final reaction.",
+    "shot_aftermath_shooter": "Your shot just resolved, possibly against yourself. React briefly to the actual result. You may speak publicly or stay silent; no game action is available in this phase.",
+    "shot_aftermath_observer": "You witnessed the shot. Write a brief private reaction. Prefer an empty public_speech unless you have a compelling reason to speak. No game action is available.",
 }
 
 
@@ -83,8 +86,8 @@ class Show:
         alive = set(self.living(states))
         return [seat for seat in self.order if seat in alive and seat != active] + ([active] if active in alive else [])
 
-    def observe(self, seat: int, phase: str, state: dict, options: list[dict]) -> dict:
-        return {
+    def observe(self, seat: int, phase: str, state: dict, options: list[dict], shot_context: dict | None = None) -> dict:
+        observation = {
             "phase": phase,
             "phase_rule": PHASE_GUIDANCE[phase],
             "seat": seat,
@@ -94,8 +97,12 @@ class Show:
             "own_private_history": self.private[seat],
             "choices": [{"index": i, "label": option["label"]} for i, option in enumerate(options)],
         }
+        if shot_context is not None:
+            observation["just_resolved_shot"] = shot_context
+        return observation
 
-    def ask(self, seat: int, phase: str, state: dict, options: list[dict], speech_only: bool = False) -> int | None:
+    def ask(self, seat: int, phase: str, state: dict, options: list[dict], speech_only: bool = False,
+            shot_context: dict | None = None) -> int | None:
         if self.calls >= self.max_calls:
             raise Pause("API call limit reached")
         if self.cost >= self.max_cost:
@@ -113,7 +120,7 @@ class Show:
         )
         body = {"model": model, "messages": [
             {"role": "system", "content": system},
-            {"role": "user", "content": json.dumps(self.observe(seat, phase, state, options), ensure_ascii=False)},
+            {"role": "user", "content": json.dumps(self.observe(seat, phase, state, options, shot_context), ensure_ascii=False)},
         ], "response_format": {"type": "json_object"}, "reasoning": {"enabled": False},
             "max_completion_tokens": 420, "temperature": 0.8}
         request = urllib.request.Request(API_URL, data=json.dumps(body).encode("utf-8"),
@@ -172,6 +179,21 @@ class Show:
             if seat == active:
                 continue
             self.ask(seat, phase, states[seat], [], speech_only=True)
+
+    def react_to_shot(self, shooter: int, shot: dict) -> None:
+        states = self.states()
+        target_socket = shot["data"]["target_socket"]
+        target = next((seat for seat, state in states.items() if state["player_socket"] == target_socket), None)
+        if target is None:
+            raise Pause("Shot target has no local seat")
+        self.log("shot_reactions_started", shooter=shooter, target=target, shot_event_id=shot["event_id"])
+        if target != shooter:
+            self.ask(target, "shot_aftermath_target", states[target], [], speech_only=True, shot_context=shot)
+        self.ask(shooter, "shot_aftermath_shooter", states[shooter], [], speech_only=True, shot_context=shot)
+        living = set(self.living(states))
+        for seat in self.order:
+            if seat in living and seat not in (shooter, target):
+                self.ask(seat, "shot_aftermath_observer", states[seat], [], speech_only=True, shot_context=shot)
 
     def targets(self, state: dict) -> list[dict]:
         return [{"action": "aim", "target_socket": p["socket"], "label": f"Aim at {p['name']}"}
@@ -243,6 +265,7 @@ class Show:
             raise Pause("Shot command accepted but shot result was not observed")
         self.shots += 1
         self.log("shot_result", seat=seat, result=shots[-1], next_state="turn_ended" if result is None else "turn_continues")
+        self.react_to_shot(seat, shots[-1])
         self.order = random.sample(self.living(self.states()), len(self.living(self.states())))
         self.log("speech_order", order=self.order, after_shot=self.shots)
 
