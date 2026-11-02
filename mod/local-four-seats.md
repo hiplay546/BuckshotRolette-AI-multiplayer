@@ -79,3 +79,5 @@ py mod/openrouter_agent.py --player 2
 The default model is `deepseek/deepseek-v4-flash-0731`. Pass `--model <OpenRouter model slug>` to use another. The script reads `OPENROUTER_API_KEY` from the environment; it does not save the key to a file or include it in the model prompt.
 
 The request disables reasoning for this short JSON choice and allows 320 completion tokens. If a provider returns no final content, the script reports the finish reason and token counts and sends no game action.
+
+To let the model make several decisions during one turn, run `py mod/openrouter_agent.py --player 2 --steps 8 --max-cost 0.01`. After every accepted command, the script waits for the resulting game state before requesting another decision. It stops when the turn or match changes, no action is available, a command is rejected, 30 seconds pass without confirmation, the step limit is reached, or the reported cost reaches the limit. The cost limit is checked before each new API request, so the last request can slightly exceed it. The one-step default remains available for manual inspection.

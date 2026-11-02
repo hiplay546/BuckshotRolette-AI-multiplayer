@@ -4,6 +4,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import math
+import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
@@ -42,12 +44,12 @@ def candidates(state: dict) -> list[dict]:
         )
     if state.get("can_pickup"):
         result.append({"action": "pickup_shotgun", "label": "Pick up shotgun"})
+    aimed = state.get("aimed_socket", -1)
     if state.get("can_aim"):
         result.extend(
             {"action": "aim", "target_socket": socket, "label": f"Aim at {p['name']}"}
-            for socket, p in players.items() if p["health"] > 0
+            for socket, p in players.items() if p["health"] > 0 and socket != aimed
         )
-    aimed = state.get("aimed_socket", -1)
     if state.get("can_shoot") and aimed in players and players[aimed]["health"] > 0:
         result.append({"action": "shoot", "target_socket": aimed,
                        "label": f"Shoot at {players[aimed]['name']}"})
@@ -131,51 +133,130 @@ def ask_model(key: str, model: str, observation: dict) -> tuple[dict, dict]:
     return decision, reply.get("usage", {})
 
 
+def read_state(directory: Path, player_number: int) -> dict:
+    try:
+        state = json.loads((directory / f"control-state-player-{player_number}.json").read_text(encoding="utf-8"))
+        updated = datetime.fromisoformat(state["updated_utc"]).replace(tzinfo=timezone.utc)
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise ValueError(f"No valid live state for player {player_number}: {exc}") from exc
+    if (datetime.now(timezone.utc) - updated).total_seconds() > 10:
+        raise ValueError("Match state is stale; start or resume the game")
+    if state.get("player_number") != player_number:
+        raise ValueError("State belongs to a different local player")
+    return state
+
+
+def action_settled(before: dict, after: dict, selected: dict) -> bool:
+    action = selected["action"]
+    if action == "pickup_shotgun":
+        return after.get("holding_shotgun") and after.get("can_aim")
+    if action == "aim":
+        return after.get("can_shoot") and after.get("aimed_socket") == selected["target_socket"]
+    if action == "shoot":
+        return (after.get("event_id", 0) > before["event_id"]
+                and not after.get("holding_shotgun")
+                and (after.get("can_pickup") or after.get("can_use_item")))
+    if action == "jammer_target":
+        return after.get("secondary_choice") != "jammer_target" and (
+            after.get("can_use_item") or after.get("can_pickup")
+        )
+    return after.get("event_id", 0) > before["event_id"] and (
+        after.get("secondary_choice") or after.get("can_use_item") or after.get("can_pickup")
+    )
+
+
+def wait_for_next_state(directory: Path, player_number: int, before: dict, selected: dict) -> tuple[dict | None, str]:
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        time.sleep(0.25)
+        try:
+            after = read_state(directory, player_number)
+        except ValueError:
+            continue
+        if after.get("match_id") != before["match_id"] or after.get("player_socket") != before["player_socket"]:
+            return None, "match_or_player_changed"
+        if after.get("active_socket") != before["player_socket"]:
+            return None, "turn_ended"
+        if action_settled(before, after, selected):
+            return after, "action_settled"
+    return None, "action_not_confirmed_within_30_seconds"
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--player", type=int, choices=range(1, 5), default=1)
     parser.add_argument("--model", default=os.environ.get("OPENROUTER_MODEL", DEFAULT_MODEL))
     parser.add_argument("--preview", action="store_true", help="show observation and choices without an API request")
+    parser.add_argument("--steps", type=int, default=1, help="maximum model actions in this turn (default: 1)")
+    parser.add_argument("--max-cost", type=float, default=0.01, help="stop after this reported USD cost (default: 0.01)")
     args = parser.parse_args()
+    if args.steps < 1 or args.steps > 20:
+        parser.error("--steps must be 1 through 20")
+    if not math.isfinite(args.max_cost) or args.max_cost <= 0:
+        parser.error("--max-cost must be positive and finite")
 
     appdata = os.environ.get("APPDATA")
     if not appdata:
         parser.error("APPDATA is not set")
     directory = Path(appdata) / "BuckshotSplitTest" / "modbucksot"
     try:
-        state = json.loads((directory / f"control-state-player-{args.player}.json").read_text(encoding="utf-8"))
-        updated = datetime.fromisoformat(state["updated_utc"]).replace(tzinfo=timezone.utc)
-    except (OSError, ValueError, KeyError, TypeError) as exc:
-        raise SystemExit(f"No valid live state for player {args.player}: {exc}") from exc
-    if (datetime.now(timezone.utc) - updated).total_seconds() > 10:
-        raise SystemExit("Match state is stale; start or resume the game")
-    if state.get("player_number") != args.player:
-        raise SystemExit("State belongs to a different local player")
-    options = candidates(state)
-    if not options:
-        raise SystemExit("No action available for this player now")
-    observation = {
-        "seat": args.player,
-        "state": state,
-        "recent_events": recent_events(directory / "events.jsonl", state["match_id"], state["player_socket"]),
-        "choices": [{"index": i, "label": option["label"]} for i, option in enumerate(options)],
-    }
-    if args.preview:
-        print(json.dumps(observation, ensure_ascii=False, indent=2))
-        return
+        state = read_state(directory, args.player)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
     key = os.environ.get("OPENROUTER_API_KEY")
-    if not key:
+    if not args.preview and not key:
         raise SystemExit("Set OPENROUTER_API_KEY in this PowerShell session; do not paste it into chat")
-    decision, usage = ask_model(key, args.model, observation)
-    index = decision.get("choice") if isinstance(decision, dict) else None
-    if type(index) is not int or index not in range(len(options)):
-        raise SystemExit(f"Model selected an invalid choice: {decision!r}")
-    selected = options[index]
-    print(json.dumps({"model": args.model, "choice": selected["label"],
-                      "reason": decision.get("reason", ""), "usage": usage}, ensure_ascii=False))
-    response = submit_command(directory, state, args.player, selected["action"],
-                              selected.get("target_socket"), selected.get("item_slot"))
-    print(json.dumps(response, ensure_ascii=False))
+    total_cost = 0.0
+    completed = 0
+    stop_reason = "step_limit"
+    for step in range(1, args.steps + 1):
+        if state.get("active_socket") != state.get("player_socket"):
+            stop_reason = "turn_ended"
+            break
+        options = candidates(state)
+        if not options:
+            stop_reason = "no_action_available"
+            break
+        observation = {
+            "seat": args.player,
+            "state": state,
+            "recent_events": recent_events(directory / "events.jsonl", state["match_id"], state["player_socket"]),
+            "choices": [{"index": i, "label": option["label"]} for i, option in enumerate(options)],
+        }
+        if args.preview:
+            print(json.dumps(observation, ensure_ascii=False, indent=2))
+            return
+        if total_cost >= args.max_cost:
+            stop_reason = "cost_limit"
+            break
+        decision, usage = ask_model(key, args.model, observation)
+        index = decision.get("choice") if isinstance(decision, dict) else None
+        if type(index) is not int or index not in range(len(options)):
+            raise SystemExit(f"Model selected an invalid choice: {decision!r}")
+        selected = options[index]
+        print(json.dumps({"step": step, "model": args.model, "choice": selected["label"],
+                          "reason": decision.get("reason", ""), "usage": usage}, ensure_ascii=False), flush=True)
+        response = submit_command(directory, state, args.player, selected["action"],
+                                  selected.get("target_socket"), selected.get("item_slot"))
+        print(json.dumps(response, ensure_ascii=False), flush=True)
+        if not response.get("accepted"):
+            stop_reason = response.get("status", "command_rejected")
+            break
+        completed += 1
+        cost = usage.get("cost")
+        if not isinstance(cost, (int, float)) or not math.isfinite(cost) or cost < 0:
+            stop_reason = "cost_unknown"
+            break
+        total_cost += cost
+        if step == args.steps:
+            stop_reason = "step_limit"
+            break
+        next_state, stop_reason = wait_for_next_state(directory, args.player, state, selected)
+        if next_state is None:
+            break
+        state = next_state
+    print(json.dumps({"completed_actions": completed, "reported_cost_usd": round(total_cost, 8),
+                      "stopped": stop_reason}, ensure_ascii=False))
 
 
 if __name__ == "__main__":
