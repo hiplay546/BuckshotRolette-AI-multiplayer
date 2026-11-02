@@ -69,6 +69,30 @@ def recent_events(path: Path, match_id: str, socket: int, limit: int = 20) -> li
     return events[-limit:]
 
 
+def parse_decision(reply: dict) -> dict:
+    try:
+        choice = reply["choices"][0]
+        content = choice["message"].get("content")
+    except (KeyError, IndexError, TypeError) as exc:
+        raise ValueError("response has no chat choice") from exc
+    if isinstance(content, list):
+        content = "".join(part.get("text", "") for part in content if isinstance(part, dict))
+    if not isinstance(content, str) or not content.strip():
+        usage = reply.get("usage") or {}
+        reason_tokens = (usage.get("completion_tokens_details") or {}).get("reasoning_tokens")
+        raise ValueError(
+            f"empty model content (finish_reason={choice.get('finish_reason')}, "
+            f"completion_tokens={usage.get('completion_tokens')}, reasoning_tokens={reason_tokens})"
+        )
+    try:
+        decision = json.loads(content)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"model content is not JSON: {exc}") from exc
+    if not isinstance(decision, dict):
+        raise ValueError("model decision is not a JSON object")
+    return decision
+
+
 def ask_model(key: str, model: str, observation: dict) -> tuple[dict, dict]:
     body = {
         "model": model,
@@ -83,7 +107,8 @@ def ask_model(key: str, model: str, observation: dict) -> tuple[dict, dict]:
             {"role": "user", "content": json.dumps(observation, ensure_ascii=False)},
         ],
         "response_format": {"type": "json_object"},
-        "max_tokens": 200,
+        "reasoning": {"enabled": False},
+        "max_completion_tokens": 320,
         "temperature": 0.5,
     }
     request = urllib.request.Request(
@@ -100,9 +125,8 @@ def ask_model(key: str, model: str, observation: dict) -> tuple[dict, dict]:
     except (urllib.error.URLError, TimeoutError) as exc:
         raise SystemExit(f"OpenRouter request failed: {exc}") from exc
     try:
-        content = reply["choices"][0]["message"]["content"]
-        decision = json.loads(content)
-    except (KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
+        decision = parse_decision(reply)
+    except ValueError as exc:
         raise SystemExit(f"OpenRouter returned no usable JSON decision: {exc}") from exc
     return decision, reply.get("usage", {})
 

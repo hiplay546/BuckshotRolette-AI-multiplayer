@@ -77,3 +77,5 @@ py mod/openrouter_agent.py --player 2
 ```
 
 The default model is `deepseek/deepseek-v4-flash-0731`. Pass `--model <OpenRouter model slug>` to use another. The script reads `OPENROUTER_API_KEY` from the environment; it does not save the key to a file or include it in the model prompt.
+
+The request disables reasoning for this short JSON choice and allows 320 completion tokens. If a provider returns no final content, the script reports the finish reason and token counts and sends no game action.
