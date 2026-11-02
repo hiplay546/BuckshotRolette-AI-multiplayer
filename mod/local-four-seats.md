@@ -11,7 +11,9 @@ The test game is `work/splitscreen-test/Buckshot Roulette.exe`. It has its own u
 3. Select **START** and press Enter.
 4. During a match, press **F1**, **F2**, **F3**, or **F4** to give the keyboard and mouse to that seat. The game logs the selected player as `[splitscreen] keyboard controls player N`.
 
-The four seats are local copies of the game's multiplayer scene. Switching input is a manual testing aid; AI agents have not been connected.
+The four seats are local copies of the game's multiplayer scene. Switching input is a manual testing aid. One OpenRouter agent can act through the bridge; the four-model orchestration is still to come.
+
+During every in-game item distribution, the local bridge automatically uses the game's grab and place requests for each of the four seats. It waits for the game's intake and grid interaction flags, chooses the first empty inventory slot, and repeats until the game ends that distribution. This is deterministic game plumbing; it makes no model request. The Godot log records each request and placement as `[modbucksot auto items]`.
 
 ## Rebuild
 

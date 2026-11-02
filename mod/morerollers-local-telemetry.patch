@@ -85,10 +85,10 @@ index a38af08..e22fb7d 100644
  	var c := ctx_of(node)
 diff --git a/src/pack/mods/splitscreen/command_bridge.gd b/src/pack/mods/splitscreen/command_bridge.gd
 new file mode 100644
-index 0000000..d1e638e
+index 0000000..884f80a
 --- /dev/null
 +++ b/src/pack/mods/splitscreen/command_bridge.gd
-@@ -0,0 +1,241 @@
+@@ -0,0 +1,256 @@
 +extends Node
 +## Local manual command interface for all four views. Every action uses the game's request path.
 +
@@ -125,6 +125,7 @@ index 0000000..d1e638e
 +	if inter == null or inter.intermed_properties == null:
 +		return
 +	var player = inter.intermed_properties
++	_auto_distribute_items(inter, player, player_number)
 +	var active_socket: int = inter.game_state.MAIN_active_current_turn_socket
 +	if active_socket != int(last_active_sockets.get(player_number, -1)):
 +		aimed_sockets.erase(player.socket_number)
@@ -192,6 +193,20 @@ index 0000000..d1e638e
 +	_append_jsonl(directory.path_join("control-results-player-%d.jsonl" % player_number), response)
 +	DirAccess.remove_absolute(command_path)
 +	print("[modbucksot control] ", response)
++
++func _auto_distribute_items(inter, player, player_number: int) -> void:
++	if !inter.game_state.MAIN_item_grabbing_in_progress or !player.is_grabbing_items:
++		return
++	var manager = player.item_manager
++	if player.is_holding_item_to_place:
++		for slot_index in range(player.user_inventory.size()):
++			if player.user_inventory[slot_index] == {} and slot_index < manager.intbranch_grid_colliders.size() and manager.intbranch_grid_colliders[slot_index].interactionAllowed:
++				manager.PlaceItemRequest(slot_index)
++				print("[modbucksot auto items] player ", player_number, " placed slot ", slot_index + 1)
++				return
++	elif manager.intbranch_intake.interactionAllowed and inter.game_state.GetItemToGrab(player, false) != null:
++		manager.GrabItemRequest()
++		print("[modbucksot auto items] player ", player_number, " requested item")
 +
 +func _can_pickup(inter, player) -> bool:
 +	return player.socket_number == inter.game_state.MAIN_active_current_turn_socket and player.has_turn and player.major_permission_enabled and !player.is_holding_shotgun and inter.intbranch_shotgun.interactionAllowed
