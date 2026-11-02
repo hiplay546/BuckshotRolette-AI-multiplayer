@@ -12,19 +12,24 @@ from pathlib import Path
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=("status", "use_item", "pickup_shotgun", "aim", "shoot"))
+    parser.add_argument("action", choices=("status", "use_item", "pickup_shotgun", "aim", "shoot", "jammer_target", "steal_item"))
     parser.add_argument("number", nargs="?", type=int, help="item slot (1-8) or player number (1-4)")
+    parser.add_argument("item_slot", nargs="?", type=int, help="opponent item slot for steal_item (1-8)")
     args = parser.parse_args()
-    if args.action == "aim" and args.number is None:
-        parser.error("aim requires a player number (1-4)")
+    if args.action in ("aim", "jammer_target", "steal_item") and args.number is None:
+        parser.error(f"{args.action} requires a player number (1-4)")
     if args.action == "use_item" and args.number is None:
         parser.error("use_item requires an item slot (1-8)")
     if args.action in ("status", "pickup_shotgun") and args.number is not None:
         parser.error(f"{args.action} does not take a player number")
-    if args.action in ("aim", "shoot") and args.number is not None and args.number not in range(1, 5):
+    if args.action in ("aim", "shoot", "jammer_target", "steal_item") and args.number is not None and args.number not in range(1, 5):
         parser.error("player number must be 1, 2, 3, or 4")
     if args.action == "use_item" and args.number not in range(1, 9):
         parser.error("item slot must be 1 through 8")
+    if args.action == "steal_item" and args.item_slot not in range(1, 9):
+        parser.error("steal_item requires an opponent item slot (1-8)")
+    if args.action != "steal_item" and args.item_slot is not None:
+        parser.error(f"{args.action} does not take a second number")
 
     appdata = os.environ.get("APPDATA")
     if not appdata:
@@ -48,7 +53,7 @@ def main() -> None:
         return
 
     target_socket = None
-    if args.action in ("aim", "shoot") and args.number is not None:
+    if args.action in ("aim", "shoot", "jammer_target", "steal_item") and args.number is not None:
         target_name = f"PLAYER {args.number}"
         target_socket = next(
             (player["socket"] for player in state["players"] if player["name"] == target_name),
@@ -75,6 +80,8 @@ def main() -> None:
         command["target_socket"] = target_socket
     if args.action == "use_item":
         command["item_slot"] = args.number
+    if args.action == "steal_item":
+        command["item_slot"] = args.item_slot
     temporary = directory / f"control-command.{command_id}.tmp"
     temporary.write_text(json.dumps(command, ensure_ascii=False), encoding="utf-8")
     temporary.replace(directory / "control-command.json")

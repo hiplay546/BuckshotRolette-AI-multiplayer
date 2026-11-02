@@ -85,10 +85,10 @@ index a38af08..e22fb7d 100644
  	var c := ctx_of(node)
 diff --git a/src/pack/mods/splitscreen/command_bridge.gd b/src/pack/mods/splitscreen/command_bridge.gd
 new file mode 100644
-index 0000000..6d51add
+index 0000000..21ae300
 --- /dev/null
 +++ b/src/pack/mods/splitscreen/command_bridge.gd
-@@ -0,0 +1,178 @@
+@@ -0,0 +1,232 @@
 +extends Node
 +## Local manual command interface for player 1. Every action goes through the game's request path.
 +
@@ -133,7 +133,17 @@ index 0000000..6d51add
 +		var item = player.user_inventory_instance_array[slot_index]
 +		if item != null and item.get_child_count() > 1:
 +			var branch = item.get_child(1)
-+			visible_items.append({"slot": slot_index + 1, "item_id": branch.item_id, "name": branch.itemName, "usable": _can_use_item(inter, player) and branch.interactionAllowed and !branch.interactionInvalid and !branch.has_secondary_interaction, "needs_second_choice": branch.has_secondary_interaction})
++			visible_items.append({"slot": slot_index + 1, "item_id": branch.item_id, "name": branch.itemName, "usable": _can_use_item(inter, player) and branch.interactionAllowed and !branch.interactionInvalid, "needs_second_choice": branch.has_secondary_interaction})
++	var stealable_items := []
++	if player.is_stealing_item:
++		for participant in inter.instance_handler.instance_property_array:
++			if participant.socket_number == player.socket_number or participant.health_current <= 0:
++				continue
++			for slot_index in range(participant.user_inventory_instance_array.size()):
++				var item = participant.user_inventory_instance_array[slot_index]
++				if item != null and item.get_child_count() > 1:
++					var branch = item.get_child(1)
++					stealable_items.append({"socket": participant.socket_number, "slot": slot_index + 1, "item_id": branch.item_id, "name": branch.itemName, "usable": branch.item_id != 8 and branch.interactionAllowed and !branch.interactionInvalid})
 +	_write_json(directory.path_join("control-state.json"), {
 +		"updated_utc": Time.get_datetime_string_from_system(true, true),
 +		"match_id": SplitMod.telemetry_match_id,
@@ -147,8 +157,11 @@ index 0000000..6d51add
 +		"can_use_item": _can_use_item(inter, player),
 +		"can_aim": _can_aim(inter, player),
 +		"can_shoot": _can_aim(inter, player) and aimed_socket >= 0,
++		"timeouts_enabled": GlobalVariables.timeouts_enabled,
++		"secondary_choice": "jammer_target" if player.is_viewing_jammer else ("steal_item" if player.is_stealing_item else ""),
 +		"players": visible_players,
 +		"items": visible_items,
++		"stealable_items": stealable_items,
 +	})
 +	var command_path := directory.path_join("control-command.json")
 +	if !FileAccess.file_exists(command_path):
@@ -212,11 +225,43 @@ index 0000000..6d51add
 +		if item == null or item.get_child_count() < 2:
 +			return "item_missing"
 +		var branch = item.get_child(1)
-+		if branch.has_secondary_interaction:
-+			return "item_needs_second_choice"
 +		if !branch.interactionAllowed or branch.interactionInvalid:
 +			return "item_not_allowed"
 +		player.item_interaction.InteractWithItemRequest(item)
++		return "request_sent"
++	if action == "jammer_target":
++		if !player.is_viewing_jammer or !player.is_on_secondary_interaction:
++			return "jammer_choice_not_ready"
++		var socket = _target_socket(command, player)
++		if socket < 0 or socket == player.socket_number:
++			return "invalid_target"
++		var target = player.GetSocketProperties(socket)
++		if target == null or target.health_current <= 0 or target.is_jammed:
++			return "target_unavailable"
++		player.item_interaction.InteractWIthItemRequest_Secondary({"item_id": 3, "item_selected_socket_number": socket})
++		return "request_sent"
++	if action == "steal_item":
++		if !player.is_stealing_item or !player.is_on_secondary_interaction:
++			return "steal_choice_not_ready"
++		var socket = _target_socket(command, player)
++		if socket < 0 or socket == player.socket_number:
++			return "invalid_target"
++		var target = player.GetSocketProperties(socket)
++		if target == null or target.health_current <= 0:
++			return "target_unavailable"
++		var slot_value = command.get("item_slot", null)
++		if !(slot_value is int or slot_value is float):
++			return "invalid_item_slot"
++		var slot_index := int(slot_value) - 1
++		if slot_index < 0 or slot_index >= target.user_inventory_instance_array.size() or float(slot_value) != float(slot_index + 1):
++			return "invalid_item_slot"
++		var item = target.user_inventory_instance_array[slot_index]
++		if item == null or item.get_child_count() < 2:
++			return "item_missing"
++		var branch = item.get_child(1)
++		if branch.item_id == 8 or !branch.interactionAllowed or branch.interactionInvalid:
++			return "item_not_allowed"
++		player.item_interaction.InteractWithItemRequest(item, true)
 +		return "request_sent"
 +	if action != "aim" and action != "shoot":
 +		return "invalid_action"
@@ -251,6 +296,15 @@ index 0000000..6d51add
 +	player.shotgun.Shoot(null, target_socket)
 +	aimed_socket = -1
 +	return "request_sent"
++
++func _target_socket(command: Dictionary, player) -> int:
++	var value = command.get("target_socket", null)
++	if !(value is int or value is float):
++		return -1
++	var socket := int(value)
++	if socket < 0 or socket > 3 or float(value) != float(socket) or player.GetSocketProperties(socket) == null:
++		return -1
++	return socket
 +
 +func _write_json(path: String, data: Dictionary) -> void:
 +	var file := FileAccess.open(path, FileAccess.WRITE)

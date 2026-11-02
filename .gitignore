@@ -5,6 +5,7 @@ tools/
 # Runtime telemetry and local configuration
 *.jsonl
 .env
+__pycache__/
 
 # Editor and operating-system files
 .vscode/
