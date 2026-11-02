@@ -83,3 +83,14 @@ The default model is `deepseek/deepseek-v4-flash-0731`. Pass `--model <OpenRoute
 The request disables reasoning for this short JSON choice and allows 320 completion tokens. If a provider returns no final content, the script reports the finish reason and token counts and sends no game action.
 
 To let the model make several decisions during one turn, run `py mod/openrouter_agent.py --player 2 --steps 8 --max-cost 0.01`. After every accepted command, the script waits for the resulting game state before requesting another decision. It stops when the turn or match changes, no action is available, a command is rejected, 90 seconds pass without confirmation, the step limit is reached, or the reported cost reaches the limit. It prints a waiting message every 10 seconds; Ctrl+C stops it cleanly. The cost limit is checked before each new API request, so the last request can slightly exceed it. The one-step default remains available for manual inspection.
+
+## Four-agent show trial
+
+`mod/four_agent_show.py` orchestrates all four seats. The default trial uses `deepseek/deepseek-v4-flash-0731` for each seat, with independent private histories and one shared public speech timeline. To replace a seat later, set `OPENROUTER_MODEL_PLAYER_1` through `OPENROUTER_MODEL_PLAYER_4` in the PowerShell environment to the desired OpenRouter slugs. The same `OPENROUTER_API_KEY` serves all four.
+
+```powershell
+py mod/four_agent_show.py --preview
+py mod/four_agent_show.py --max-shots 1 --max-calls 40 --max-cost 0.01
+```
+
+Run the second command during a live four-seat match when the game is ready for a player action. The first trial stops after one resolved shot. The orchestrator asks the active model to choose items one at a time, requests reactions from the other living players after items, chooses a preliminary aim, runs a first negotiation round, locks the final target, runs a speech-only final round, and sends the locked shot exactly once. It saves public speech, authored private comments, action results, model IDs, usage, and technical pauses in `%APPDATA%/BuckshotSplitTest/modbucksot/show.jsonl`; public speech is also printed in the console for later voiceover. No live TTS is involved. A budget is checked before each call, so the final call can slightly exceed it. Invalid model output or stale game state pauses the trial without a replacement action.
