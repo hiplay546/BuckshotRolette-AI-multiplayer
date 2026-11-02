@@ -1,0 +1,13 @@
+﻿# Large local game copies and reverse-engineering output
+work/
+tools/
+
+# Runtime telemetry and local configuration
+*.jsonl
+.env
+
+# Editor and operating-system files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
