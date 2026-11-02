@@ -1,0 +1,59 @@
+diff --git a/src/telemetry_additions.gd b/src/telemetry_additions.gd
+new file mode 100644
+index 0000000..1ff2946
+--- /dev/null
++++ b/src/telemetry_additions.gd
+@@ -0,0 +1,37 @@
++
++# Passive host-only telemetry. Appended to MP_RoundManager.gd by tools/build.js.
++var telemetry_event_id := 0
++var telemetry_match_id := ""
++
++func TelemetryTurnChanged(previous_socket: int, active_socket: int) -> void:
++	if SplitMod.sid(self) != GlobalSteam.HOST_ID:
++		return
++	if telemetry_match_id == "":
++		telemetry_match_id = str(Time.get_unix_time_from_system()) + "-" + str(get_instance_id())
++	telemetry_event_id += 1
++	var directory := ProjectSettings.globalize_path("user://modbucksot")
++	var error := DirAccess.make_dir_recursive_absolute(directory)
++	if error != OK:
++		push_warning("Modbucksot telemetry: directory creation failed: " + str(error))
++		return
++	var path := directory.path_join("events.jsonl")
++	var mode := FileAccess.READ_WRITE if FileAccess.file_exists(path) else FileAccess.WRITE
++	var file := FileAccess.open(path, mode)
++	if file == null:
++		push_warning("Modbucksot telemetry: file open failed: " + str(FileAccess.get_open_error()))
++		return
++	file.seek_end()
++	file.store_line(JSON.stringify({
++		"schema_version": 1,
++		"event_id": telemetry_event_id,
++		"match_id": telemetry_match_id,
++		"timestamp_utc": Time.get_datetime_string_from_system(true, true),
++		"type": "turn_changed",
++		"visibility": "public",
++		"data": {
++			"previous_socket": previous_socket,
++			"active_socket": active_socket,
++			"round_index": game_state.MAIN_active_round_index,
++		}
++	}))
++	file.close()
+diff --git a/tools/build.js b/tools/build.js
+index c3b598d..45f36d1 100644
+--- a/tools/build.js
++++ b/tools/build.js
+@@ -88,6 +88,11 @@ func split_read_p2p_packet() -> void:
+   'res://multiplayer/scripts/global scripts/MP_UserInstanceHandler.gd': [
+     ['func GetRoot():\n', 'func GetRoot():\n\tif SplitMod.active:\n\t\tscene_root = SplitMod.mp_root(self)\n\t\treturn\n', 1],
+   ],
++  'res://multiplayer/scripts/global scripts/MP_RoundManager.gd': [
++    ['\tprint("passing turn to: ", active_properties.user_name)\n',
++     '\tprint("passing turn to: ", active_properties.user_name)\n\tTelemetryTurnChanged(previous_socket, to_socket)\n', 1],
++    [null, fs.readFileSync(path.join(root, 'src', 'telemetry_additions.gd'), 'utf8'), 0],
++  ],
+   'res://multiplayer/scripts/global scripts/MP_InteractionIntermediary.gd': [
+     ['\tget_tree().change_scene_to_file("res://multiplayer/scenes/mp_lobby.tscn")', '\tSplitMod.change_scene(self, "res://multiplayer/scenes/mp_lobby.tscn")', 1],
+   ],
