@@ -1,5 +1,5 @@
 diff --git a/src/loader.gd b/src/loader.gd
-index a38af08..94d5345 100644
+index a38af08..1301b19 100644
 --- a/src/loader.gd
 +++ b/src/loader.gd
 @@ -21,6 +21,7 @@ const MATCH_CUSTOMIZATION_SCRIPT := "res://multiplayer/scripts/global scripts/MP
@@ -37,11 +37,11 @@ index a38af08..94d5345 100644
  	contexts.clear()
  	for i in players.size():
  		var c := Ctx.new()
-@@ -257,6 +264,35 @@ func sid(node: Node) -> int:
+@@ -257,6 +264,38 @@ func sid(node: Node) -> int:
  	var c := ctx_of(node)
  	return c.user_id if c != null else GlobalSteam.STEAM_ID
  
-+func telemetry_write(node: Node, event_type: String, data: Dictionary) -> void:
++func telemetry_write(node: Node, event_type: String, data: Dictionary, visibility: String = "public", recipient_socket: int = -1) -> void:
 +	if sid(node) != GlobalSteam.HOST_ID:
 +		return
 +	if telemetry_match_id == "":
@@ -59,15 +59,18 @@ index a38af08..94d5345 100644
 +		return
 +	telemetry_event_id += 1
 +	file.seek_end()
-+	file.store_line(JSON.stringify({
++	var record := {
 +		"schema_version": 1,
 +		"event_id": telemetry_event_id,
 +		"match_id": telemetry_match_id,
 +		"timestamp_utc": Time.get_datetime_string_from_system(true, true),
 +		"type": event_type,
-+		"visibility": "public",
++		"visibility": visibility,
 +		"data": data,
-+	}))
++	}
++	if visibility == "private":
++		record["recipient_socket"] = recipient_socket
++	file.store_line(JSON.stringify(record))
 +	file.close()
 +
  ## Replaces GlobalVariables for values that belong to one local player.
@@ -148,13 +151,19 @@ index d873bc9..f3f0795 100644
  		target = _kbm_index
 diff --git a/src/shot_telemetry.gd b/src/shot_telemetry.gd
 new file mode 100644
-index 0000000..2f392e6
+index 0000000..f2db3ac
 --- /dev/null
 +++ b/src/shot_telemetry.gd
-@@ -0,0 +1,16 @@
+@@ -0,0 +1,30 @@
 +
 +# Called after ShootingOutcome has applied damage and consumed the shell.
-+func TelemetryShotOutcome() -> void:
++func TelemetryTargetHealth() -> int:
++	for instance in intermediary.instance_handler.instance_property_array:
++		if instance.socket_number == active_shooter_socket_target:
++			return instance.health_current
++	return -1
++
++func TelemetryShotOutcome(target_health_before: int) -> void:
 +	var target_health := -1
 +	for instance in intermediary.instance_handler.instance_property_array:
 +		if instance.socket_number == active_shooter_socket_target:
@@ -165,9 +174,17 @@ index 0000000..2f392e6
 +		"target_socket": active_shooter_socket_target,
 +		"shell": active_shooter_shell,
 +		"damage": active_shooter_shotgun_damage if active_shooter_shell == "live" else 0,
++		"target_health_before": target_health_before,
 +		"target_health": target_health,
 +		"target_health_zero": target_health == 0,
 +	})
++	if target_health_before != target_health:
++		SplitMod.telemetry_write(self, "health_changed", {
++			"socket": active_shooter_socket_target,
++			"before": target_health_before,
++			"after": target_health,
++			"reason": "shot",
++		})
 diff --git a/src/telemetry_additions.gd b/src/telemetry_additions.gd
 new file mode 100644
 index 0000000..47271cc
@@ -184,26 +201,50 @@ index 0000000..47271cc
 +			"round_index": game_state.MAIN_active_round_index,
 +	})
 diff --git a/tools/build.js b/tools/build.js
-index c3b598d..8233008 100644
+index c3b598d..59ce08f 100644
 --- a/tools/build.js
 +++ b/tools/build.js
-@@ -88,6 +88,20 @@ func split_read_p2p_packet() -> void:
+@@ -88,6 +88,44 @@ func split_read_p2p_packet() -> void:
    'res://multiplayer/scripts/global scripts/MP_UserInstanceHandler.gd': [
      ['func GetRoot():\n', 'func GetRoot():\n\tif SplitMod.active:\n\t\tscene_root = SplitMod.mp_root(self)\n\t\treturn\n', 1],
    ],
 +  'res://multiplayer/scripts/global scripts/MP_RoundManager.gd': [
++    ['\t\t\tgame_state.MAIN_active_round_index = dict.active_round_index\n',
++     '\t\t\tgame_state.MAIN_active_round_index = dict.active_round_index\n\t\t\tSplitMod.telemetry_write(self, "round_started", {"round_index": dict.active_round_index, "first_turn_socket": dict.first_turn_socket})\n', 1],
++    ['func GameConclusion(packet : Dictionary):\n',
++     'func GameConclusion(packet : Dictionary):\n\tSplitMod.telemetry_write(self, "game_concluded", {"round_index": game_state.MAIN_active_round_index})\n', 1],
 +    ['\tprint("passing turn to: ", active_properties.user_name)\n',
 +     '\tprint("passing turn to: ", active_properties.user_name)\n\tTelemetryTurnChanged(previous_socket, to_socket)\n', 1],
 +    [null, fs.readFileSync(path.join(root, 'src', 'telemetry_additions.gd'), 'utf8'), 0],
 +  ],
 +  'res://multiplayer/scripts/user scripts/MP_ItemInteraction.gd': [
++    ['\t\t\tshell_branch_inspection.SetState_Inspecting(shell_in_chamber)\n',
++     '\t\t\tshell_branch_inspection.SetState_Inspecting(shell_in_chamber)\n\t\t\tSplitMod.telemetry_write(self, "item_private_result", {"item_id": 2, "shell": shell_in_chamber}, "private", properties.socket_number)\n', 1],
++    ['\t\t\t\tproperties.health_current += 1\n',
++     '\t\t\t\tvar health_before := properties.health_current\n\t\t\t\tproperties.health_current += 1\n\t\t\t\tSplitMod.telemetry_write(self, "health_changed", {"socket": properties.socket_number, "before": health_before, "after": properties.health_current, "reason": "cigarettes"})\n', 1],
 +    ['\nfunc RemoveItemFromInventory(at_local_grid_index : int, item_at_socket_number : int):',
 +     '\n\tSplitMod.telemetry_write(self, "item_used", {"socket": properties.socket_number, "item_id": item_id, "item_socket": packet.get("item_socket_number", properties.socket_number), "stealing_item": packet.get("stealing_item", false)})\n\nfunc RemoveItemFromInventory(at_local_grid_index : int, item_at_socket_number : int):', 1],
 +  ],
 +  'res://multiplayer/scripts/user scripts/MP_ShotgunInteraction.gd': [
++    ['\t\tproperties.is_holding_shotgun = true\n',
++     '\t\tproperties.is_holding_shotgun = true\n\t\tSplitMod.telemetry_write(self, "shotgun_picked_up", {"socket": properties.socket_number})\n', 1],
++    ['\tactive_shooter_socket_target = packet_dictionary.shooter_socket_target\n',
++     '\tactive_shooter_socket_target = packet_dictionary.shooter_socket_target\n\tSplitMod.telemetry_write(self, "shot_target_confirmed", {"shooter_socket": packet_dictionary.shooter_socket_self, "target_socket": packet_dictionary.shooter_socket_target})\n', 1],
++    ['\tvar current_shell = intermediary.game_state.MAIN_shooter_shell\n',
++     '\tvar current_shell = intermediary.game_state.MAIN_shooter_shell\n\tvar telemetry_target_health_before: int = TelemetryTargetHealth()\n', 1],
 +    ['\tCheckIfFinalShot()\n\nfunc CheckIfFinalShot():',
-+     '\tCheckIfFinalShot()\n\tTelemetryShotOutcome()\n\nfunc CheckIfFinalShot():', 1],
++     '\tCheckIfFinalShot()\n\tTelemetryShotOutcome(telemetry_target_health_before)\n\nfunc CheckIfFinalShot():', 1],
 +    [null, fs.readFileSync(path.join(root, 'src', 'shot_telemetry.gd'), 'utf8'), 0],
++  ],
++  'res://multiplayer/scripts/user scripts/MP_UserLook.gd': [
++    ['\t\tLookAtDirection(direction_to_look)\n',
++     '\t\tLookAtDirection(direction_to_look)\n\t\tif properties.is_holding_shotgun and direction_to_look in ["left", "forward", "right"]:\n\t\t\tSplitMod.telemetry_write(self, "aim_changed", {"shooter_socket": properties.socket_number, "target_socket": properties.GetSocketFromDirection(properties.socket_number, direction_to_look), "direction": direction_to_look})\n', 1],
++  ],
++  'res://multiplayer/scripts/user scripts/MP_DeathManager.gd': [
++    ['func UserDeath_EnterSpectatorMode():\n',
++     'func UserDeath_EnterSpectatorMode():\n\tSplitMod.telemetry_write(self, "player_spectating", {"socket": properties.socket_number, "health": properties.health_current})\n', 1],
++    ['\tproperties.is_spectating = false\n',
++     '\tproperties.is_spectating = false\n\tSplitMod.telemetry_write(self, "player_revived", {"socket": properties.socket_number, "health": properties.health_current})\n', 1],
 +  ],
    'res://multiplayer/scripts/global scripts/MP_InteractionIntermediary.gd': [
      ['\tget_tree().change_scene_to_file("res://multiplayer/scenes/mp_lobby.tscn")', '\tSplitMod.change_scene(self, "res://multiplayer/scenes/mp_lobby.tscn")', 1],
