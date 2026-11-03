@@ -479,10 +479,10 @@ index 0000000..47271cc
 +			"round_index": game_state.MAIN_active_round_index,
 +	})
 diff --git a/tools/build.js b/tools/build.js
-index c3b598d..fd53e33 100644
+index c3b598d..ba0346c 100644
 --- a/tools/build.js
 +++ b/tools/build.js
-@@ -88,6 +88,44 @@ func split_read_p2p_packet() -> void:
+@@ -88,6 +88,52 @@ func split_read_p2p_packet() -> void:
    'res://multiplayer/scripts/global scripts/MP_UserInstanceHandler.gd': [
      ['func GetRoot():\n', 'func GetRoot():\n\tif SplitMod.active:\n\t\tscene_root = SplitMod.mp_root(self)\n\t\treturn\n', 1],
    ],
@@ -493,6 +493,8 @@ index c3b598d..fd53e33 100644
 +     'func GameConclusion(packet : Dictionary):\n\tSplitMod.telemetry_write(self, "game_concluded", {"round_index": game_state.MAIN_active_round_index})\n', 1],
 +    ['\tprint("passing turn to: ", active_properties.user_name)\n',
 +     '\tprint("passing turn to: ", active_properties.user_name)\n\tTelemetryTurnChanged(previous_socket, to_socket)\n', 1],
++    ['\tGenerateRandomSequence()\n\tvar packet = {\n',
++     '\tGenerateRandomSequence()\n\tSplitMod.telemetry_write(self, "shotgun_loaded", {"live": game_state.MAIN_active_sequence_dict.sequence.count("live"), "blank": game_state.MAIN_active_sequence_dict.sequence.count("blank")})\n\tvar packet = {\n', 1],
 +    [null, fs.readFileSync(path.join(root, 'src', 'telemetry_additions.gd'), 'utf8'), 0],
 +  ],
 +  'res://multiplayer/scripts/user scripts/MP_ItemInteraction.gd': [
@@ -500,8 +502,14 @@ index c3b598d..fd53e33 100644
 +     '\t\t\tshell_branch_inspection.SetState_Inspecting(shell_in_chamber)\n\t\t\tSplitMod.telemetry_write(self, "item_private_result", {"item_id": 2, "shell": shell_in_chamber}, "private", properties.socket_number)\n', 1],
 +    ['\t\t\t\tproperties.health_current += 1\n',
 +     '\t\t\t\tvar health_before := properties.health_current\n\t\t\t\tproperties.health_current += 1\n\t\t\t\tSplitMod.telemetry_write(self, "health_changed", {"socket": properties.socket_number, "before": health_before, "after": properties.health_current, "reason": "cigarettes"})\n', 1],
++    ['\t\t5:\t#beer\n\t\t\tshotgun.RemoveFirstShellFromSequence()\n',
++     '\t\t5:\t#beer\n\t\t\tSplitMod.telemetry_write(self, "shell_ejected", {"shell": packet.current_shell_in_chamber, "socket": properties.socket_number})\n\t\t\tshotgun.RemoveFirstShellFromSequence()\n', 1],
 +    ['\nfunc RemoveItemFromInventory(at_local_grid_index : int, item_at_socket_number : int):',
 +     '\n\tSplitMod.telemetry_write(self, "item_used", {"socket": properties.socket_number, "item_id": item_id, "item_socket": packet.get("item_socket_number", properties.socket_number), "stealing_item": packet.get("stealing_item", false)})\n\nfunc RemoveItemFromInventory(at_local_grid_index : int, item_at_socket_number : int):', 1],
++  ],
++  'res://multiplayer/scripts/global scripts/MP_PacketVerification.gd': [
++    ['\t\t\t\tcustom_target_packet.phone_verbal_shell = game_state._GetBurnerPhone_Shell(custom_target_packet.phone_verbal_index)\n',
++     '\t\t\t\tcustom_target_packet.phone_verbal_shell = game_state._GetBurnerPhone_Shell(custom_target_packet.phone_verbal_index)\n\t\t\t\tSplitMod.telemetry_write(self, "item_private_result", {"item_id": 6, "shell_index": custom_target_packet.phone_verbal_index, "shell": custom_target_packet.phone_verbal_shell}, "private", dict.sent_from_socket)\n', 1],
 +  ],
 +  'res://multiplayer/scripts/user scripts/MP_ShotgunInteraction.gd': [
 +    ['\t\tproperties.is_holding_shotgun = true\n',
