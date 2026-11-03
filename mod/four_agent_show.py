@@ -96,6 +96,7 @@ class Show:
         self.public: list[dict] = []
         self.private: dict[int, list[dict]] = {seat: [] for seat in range(1, 5)}
         self.styles: dict[int, str | None] = {seat: None for seat in range(1, 5)}
+        self.player_windows = False
         self.log_path = directory / "show.jsonl"
 
     def log(self, kind: str, **data) -> None:
@@ -103,7 +104,21 @@ class Show:
                   "match_id": self.match_id, **data}
         with self.log_path.open("a", encoding="utf-8") as file:
             file.write(json.dumps(record, ensure_ascii=False) + "\n")
-        if kind not in ("model_response", "repeated_speech_suppressed"):
+        if kind == "model_response":
+            if not self.player_windows:
+                print(f"\n[PLAYER {record['seat']} | {record['phase']}]", flush=True)
+                print(f"МАНЕРА: {record.get('delivery_style') or '—'}", flush=True)
+                print(f"МЫСЛЬ: {record.get('private_thought') or '—'}", flush=True)
+                print(f"РЕПЛИКА: {record.get('public_speech') or '— (молчит)'}", flush=True)
+                print(f"ДЕЙСТВИЕ: {record.get('action') or '—'}", flush=True)
+        elif kind == "command_result":
+            action = record.get("action") or {}
+            response = record.get("response") or {}
+            print(f"[PLAYER {record['seat']}] КОМАНДА: {action.get('label', action.get('action', '?'))} | {response.get('status', '?')}", flush=True)
+        elif kind == "repeated_speech_suppressed":
+            if not self.player_windows:
+                print(f"[PLAYER {record['seat']}] Повторная реплика скрыта", flush=True)
+        else:
             print(json.dumps(record, ensure_ascii=False), flush=True)
 
     def restore_history(self) -> None:
@@ -433,8 +448,11 @@ def main() -> None:
     parser.add_argument("--max-cost", type=float, default=0.02)
     parser.add_argument("--model", default=DEFAULT_MODEL, help="default model for all four seats")
     parser.add_argument("--preview", action="store_true", help="show seat-to-model mapping without API calls")
-    parser.add_argument("--no-player-windows", action="store_true", help="keep output in the main terminal only")
+    parser.add_argument("--player-windows", action="store_true", help="open four separate player terminals")
+    parser.add_argument("--no-player-windows", action="store_true", help="deprecated: one terminal is now the default")
     args = parser.parse_args()
+    if args.player_windows and args.no_player_windows:
+        parser.error("choose either --player-windows or --no-player-windows")
     if args.max_shots < 1 or args.max_shots > 20 or args.max_calls < 1 or args.max_calls > 200:
         parser.error("shot/call limits are outside supported bounds")
     if not math.isfinite(args.max_cost) or args.max_cost <= 0:
@@ -453,8 +471,9 @@ def main() -> None:
         raise SystemExit("Set OPENROUTER_API_KEY in this PowerShell session")
     show = Show(directory, key, models, args.max_calls, args.max_cost, args.max_shots)
     try:
-        if not args.no_player_windows:
+        if args.player_windows:
             start_player_windows(show.log_path)
+            show.player_windows = sys.platform == "win32"
         show.run()
     except (Pause, KeyboardInterrupt) as exc:
         show.log("technical_pause", reason=str(exc) if str(exc) else "stopped_by_user",
