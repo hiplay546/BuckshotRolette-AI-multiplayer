@@ -62,6 +62,25 @@ DELIVERY_STYLES = (
 )
 
 
+def normalize_signature_style(value: object, seat: int) -> tuple[str, bool]:
+    """Keep a model's style choice without pausing a match over its wording."""
+    if isinstance(value, str):
+        proposed = value.strip().casefold()
+        for style in DELIVERY_STYLES:
+            if proposed == style.casefold():
+                return style, False
+        aliases = (
+            ("дерз", 0), ("bold", 0), ("язв", 1), ("сарказ", 1), ("sarcast", 1),
+            ("игрив", 2), ("насмеш", 2), ("playful", 2), ("холод", 3), ("cold", 3),
+            ("злоб", 4), ("мст", 4), ("нерв", 5), ("угрож", 6), ("растер", 7),
+            ("черн", 8), ("чёрн", 8), ("вежлив", 9), ("шут", 10), ("авант", 11),
+        )
+        for keyword, index in aliases:
+            if keyword in proposed:
+                return DELIVERY_STYLES[index], True
+    return DELIVERY_STYLES[(seat - 1) % len(DELIVERY_STYLES)], True
+
+
 def repeated_speech(speech: str, history: list[dict], seat: int) -> bool:
     words = re.findall(r"[\w]+", speech.casefold().replace("ё", "е"), flags=re.UNICODE)
     if len(words) < 3:
@@ -257,15 +276,12 @@ class Show:
             raise Pause("OpenRouter did not report a valid cost")
         self.cost += cost
         thought = decision.get("private_thought")
-        style = self.styles[seat] or decision.get("signature_style")
+        style, style_adjusted = (self.styles[seat], False) if self.styles[seat] else normalize_signature_style(
+            decision.get("signature_style"), seat)
         speech = decision.get("public_speech")
         action = decision.get("action")
-        if not isinstance(thought, str) or len(thought) > 240:
-            raise Pause("Invalid private_thought")
-        if not isinstance(speech, str) or len(speech) > 360:
-            raise Pause("Invalid public_speech")
-        if style not in DELIVERY_STYLES:
-            raise Pause("Invalid signature_style")
+        thought = thought[:240] if isinstance(thought, str) else ""
+        speech = speech[:360] if isinstance(speech, str) else ""
         if speech and repeated_speech(speech, self.public[-80:], seat):
             self.log("repeated_speech_suppressed", seat=seat, phase=phase, text=speech)
             speech = ""
@@ -280,7 +296,8 @@ class Show:
         if speech:
             self.public.append({"seat": seat, "phase": phase, "style": style, "text": speech})
         self.log("model_response", seat=seat, model=model, phase=phase, private_thought=thought,
-                 delivery_style=style, public_speech=speech, action=selected, usage=usage)
+                 delivery_style=style, style_adjusted=style_adjusted,
+                 public_speech=speech, action=selected, usage=usage)
         return action
 
     def act(self, seat: int, state: dict, selected: dict) -> dict | None:
