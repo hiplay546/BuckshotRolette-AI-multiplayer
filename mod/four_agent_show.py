@@ -99,6 +99,29 @@ class Pause(Exception):
     pass
 
 
+def parse_show_decision(reply: dict) -> dict:
+    try:
+        return parse_decision(reply)
+    except ValueError as original_error:
+        try:
+            content = reply["choices"][0]["message"].get("content")
+        except (KeyError, IndexError, TypeError):
+            raise original_error
+        if isinstance(content, list):
+            content = "".join(part.get("text", "") for part in content if isinstance(part, dict))
+        if isinstance(content, str):
+            decoder = json.JSONDecoder()
+            for match in re.finditer(r"\{", content):
+                try:
+                    decision, _ = decoder.raw_decode(content[match.start():])
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(decision, dict) and any(key in decision for key in
+                                                      ("action", "public_speech", "private_thought")):
+                    return decision
+        raise original_error
+
+
 class Show:
     def __init__(self, directory: Path, key: str, models: dict[int, str], max_calls: int, max_cost: float, max_shots: int):
         self.directory = directory
@@ -223,10 +246,6 @@ class Show:
 
     def ask(self, seat: int, phase: str, state: dict, options: list[dict], speech_only: bool = False,
             shot_context: dict | None = None) -> int | None:
-        if self.calls >= self.max_calls:
-            raise Pause("API call limit reached")
-        if self.cost >= self.max_cost:
-            raise Pause("Reported cost limit reached")
         model = self.models[seat]
         system = (
             f"You are PLAYER {seat}, physically seated at a four-player Buckshot Roulette table. "
@@ -258,23 +277,45 @@ class Show:
             {"role": "user", "content": json.dumps(self.observe(seat, phase, state, options, shot_context), ensure_ascii=False)},
         ], "response_format": {"type": "json_object"}, "reasoning": {"enabled": False},
             "max_completion_tokens": 420, "temperature": 0.8}
-        request = urllib.request.Request(API_URL, data=json.dumps(body).encode("utf-8"),
-                                         headers={"Authorization": f"Bearer {self.key}", "Content-Type": "application/json"},
-                                         method="POST")
-        try:
-            with urllib.request.urlopen(request, timeout=75) as response:
-                reply = json.load(response)
-            decision = parse_decision(reply)
-        except urllib.error.HTTPError as exc:
-            raise Pause(f"OpenRouter HTTP {exc.code}") from exc
-        except (urllib.error.URLError, TimeoutError, ValueError, OSError) as exc:
-            raise Pause(f"OpenRouter response failed: {exc}") from exc
-        self.calls += 1
-        usage = reply.get("usage") or {}
-        cost = usage.get("cost")
-        if not isinstance(cost, (int, float)) or not math.isfinite(cost) or cost < 0:
-            raise Pause("OpenRouter did not report a valid cost")
-        self.cost += cost
+        for attempt in range(2):
+            if self.calls >= self.max_calls:
+                raise Pause("API call limit reached")
+            if self.cost >= self.max_cost:
+                raise Pause("Reported cost limit reached")
+            request_body = body.copy()
+            if attempt:
+                request_body["messages"] = body["messages"] + [{"role": "user", "content":
+                    "The previous answer was not a usable JSON object. Return ONLY one complete JSON object "
+                    "with private_thought, public_speech, action, and signature_style if requested. No Markdown or preamble."}]
+                request_body["max_completion_tokens"] = 800
+                request_body["temperature"] = 0.2
+            request = urllib.request.Request(API_URL, data=json.dumps(request_body).encode("utf-8"),
+                                             headers={"Authorization": f"Bearer {self.key}", "Content-Type": "application/json"},
+                                             method="POST")
+            try:
+                with urllib.request.urlopen(request, timeout=75) as response:
+                    reply = json.load(response)
+            except urllib.error.HTTPError as exc:
+                raise Pause(f"OpenRouter HTTP {exc.code}") from exc
+            except (urllib.error.URLError, TimeoutError, ValueError, OSError) as exc:
+                raise Pause(f"OpenRouter response failed: {exc}") from exc
+            if not isinstance(reply, dict):
+                raise Pause("OpenRouter response is not an object")
+            self.calls += 1
+            usage = reply.get("usage") or {}
+            cost = usage.get("cost")
+            if not isinstance(cost, (int, float)) or not math.isfinite(cost) or cost < 0:
+                raise Pause("OpenRouter did not report a valid cost")
+            self.cost += cost
+            try:
+                decision = parse_show_decision(reply)
+                break
+            except ValueError as exc:
+                self.log("model_response_retry", seat=seat, phase=phase, attempt=attempt + 1,
+                         reason=str(exc), finish_reason=(reply.get("choices") or [{}])[0].get("finish_reason"),
+                         usage=usage)
+                if attempt == 1:
+                    raise Pause("OpenRouter returned no usable JSON after two attempts") from exc
         thought = decision.get("private_thought")
         style, style_adjusted = (self.styles[seat], False) if self.styles[seat] else normalize_signature_style(
             decision.get("signature_style"), seat)
