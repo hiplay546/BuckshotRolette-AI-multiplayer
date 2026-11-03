@@ -18,6 +18,7 @@ from pathlib import Path
 from openrouter_agent import DEFAULT_MODEL, candidates, parse_decision, read_state, recent_events, wait_for_next_state
 from send_local_command import submit_command
 from shell_tracker import summarize_shells
+from voicestudio_tts import VoiceStudioTTS, list_profiles
 from windows_tts import TTSError, WindowsTTS
 
 API_URL = "https://openrouter.ai/api/v1/chat/completions"
@@ -140,7 +141,7 @@ def healing_context(state: dict, events: list[dict]) -> dict:
 
 class Show:
     def __init__(self, directory: Path, key: str, models: dict[int, str], max_calls: int, max_cost: float,
-                 max_shots: int, tts: WindowsTTS | None = None, reasoning_effort: str = "low"):
+                 max_shots: int, tts: WindowsTTS | VoiceStudioTTS | None = None, reasoning_effort: str = "low"):
         self.directory = directory
         self.key = key
         self.models = models
@@ -584,6 +585,11 @@ def main() -> None:
     parser.add_argument("--player-windows", action="store_true", help="open four separate player terminals")
     parser.add_argument("--no-player-windows", action="store_true", help="deprecated: one terminal is now the default")
     parser.add_argument("--no-tts", action="store_true", help="disable spoken public lines")
+    parser.add_argument("--list-voices", action="store_true", help="list saved VoiceStudio profile IDs")
+    parser.add_argument("--test-voices", action="store_true", help="speak one short line per assigned VoiceStudio profile")
+    for seat in range(1, 5):
+        parser.add_argument(f"--voice-{seat}", default=os.environ.get(f"VOICESTUDIO_VOICE_PLAYER_{seat}"),
+                            help=f"VoiceStudio profile ID for player {seat}")
     parser.add_argument("--reasoning-effort", choices=("none", "low"), default="low",
                         help="OpenRouter reasoning effort for show decisions (default: low)")
     args = parser.parse_args()
@@ -593,6 +599,31 @@ def main() -> None:
         parser.error("shot/call limits are outside supported bounds")
     if not math.isfinite(args.max_cost) or args.max_cost <= 0:
         parser.error("--max-cost must be positive and finite")
+    if args.list_voices:
+        try:
+            print(json.dumps(list_profiles(), ensure_ascii=False, indent=2))
+        except TTSError as exc:
+            parser.error(str(exc))
+        return
+    voices = {seat: getattr(args, f"voice_{seat}") for seat in range(1, 5)}
+    assigned = {seat: voice for seat, voice in voices.items() if voice}
+    if assigned and len(assigned) != 4:
+        parser.error("assign all four VoiceStudio profiles with --voice-1 through --voice-4")
+    if args.test_voices and not assigned:
+        parser.error("--test-voices requires four VoiceStudio profile IDs")
+    if args.no_tts and assigned:
+        parser.error("--no-tts cannot be combined with VoiceStudio profile IDs")
+    tts = None if args.no_tts else VoiceStudioTTS(assigned) if assigned else WindowsTTS()
+    if isinstance(tts, VoiceStudioTTS) and not args.preview:
+        try:
+            tts.validate_profiles()
+            if args.test_voices:
+                for seat in range(1, 5):
+                    print(f"PLAYER {seat}: {tts.voices[seat]}", flush=True)
+                    tts.speak(seat, f"Игрок {seat}. Проверка голоса.")
+                return
+        except TTSError as exc:
+            parser.error(str(exc))
     appdata = os.environ.get("APPDATA")
     if not appdata:
         parser.error("APPDATA is not set")
@@ -601,13 +632,15 @@ def main() -> None:
     if args.preview:
         print(json.dumps({"models": models, "max_shots": args.max_shots,
                           "max_calls": args.max_calls, "max_cost_usd": args.max_cost,
-                          "reasoning_effort": args.reasoning_effort}, ensure_ascii=False, indent=2))
+                          "reasoning_effort": args.reasoning_effort,
+                          "tts": "VoiceStudio" if assigned else "off" if args.no_tts else "Windows",
+                          "voices": assigned}, ensure_ascii=False, indent=2))
         return
     key = os.environ.get("OPENROUTER_API_KEY")
     if not key:
         raise SystemExit("Set OPENROUTER_API_KEY in this PowerShell session")
     show = Show(directory, key, models, args.max_calls, args.max_cost, args.max_shots,
-                tts=None if args.no_tts else WindowsTTS(), reasoning_effort=args.reasoning_effort)
+                tts=tts, reasoning_effort=args.reasoning_effort)
     try:
         if args.player_windows:
             start_player_windows(show.log_path)

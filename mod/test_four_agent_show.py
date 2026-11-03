@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from four_agent_show import DELIVERY_STYLES, Show, normalize_signature_style
+from voicestudio_tts import VoiceStudioTTS
 
 
 class FourAgentShowTests(unittest.TestCase):
@@ -54,6 +55,23 @@ class FourAgentShowTests(unittest.TestCase):
             self.assertEqual(sent[0]["response_format"], {"type": "json_object"})
             self.assertEqual(show.styles[1], DELIVERY_STYLES[0])
             self.assertIn("Патроны:", show.private[1][0]["text"])
+
+    def test_voicestudio_uses_assigned_profile_and_blocks_for_playback(self):
+        assigned = {1: "voice-one", 2: "voice-two", 3: "voice-three", 4: "voice-four"}
+        tts = VoiceStudioTTS(assigned)
+        sent = []
+        wav = b"RIFF" + (4).to_bytes(4, "little") + b"WAVE"
+
+        def fake_urlopen(request, timeout):
+            sent.append(json.loads(request.data))
+            return io.BytesIO(wav)
+
+        with patch("voicestudio_tts.urllib.request.urlopen", side_effect=fake_urlopen), \
+                patch("winsound.PlaySound") as play:
+            tts.speak(2, "Проверка голоса")
+        self.assertEqual(sent[0]["voice"], "voice-two")
+        self.assertEqual(sent[0]["response_format"], "wav")
+        play.assert_called_once()
 
 
 if __name__ == "__main__":
