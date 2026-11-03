@@ -18,6 +18,7 @@ from pathlib import Path
 from openrouter_agent import DEFAULT_MODEL, candidates, parse_decision, read_state, recent_events, wait_for_next_state
 from send_local_command import submit_command
 from shell_tracker import summarize_shells
+from windows_tts import TTSError, WindowsTTS
 
 API_URL = "https://openrouter.ai/api/v1/chat/completions"
 PHASE_GUIDANCE = {
@@ -25,8 +26,8 @@ PHASE_GUIDANCE = {
     "after_item_reaction": "Another player just used an item. React publicly or stay silent; you cannot act now.",
     "preliminary_aim": "Choose a living preliminary target, including yourself. If the current shell is known blank, self-targeting can preserve your turn. This does not fire the shotgun; negotiations follow.",
     "first_negotiation": "The shooter has a preliminary target. React publicly or stay silent; you cannot act now.",
-    "final_target": "You are the shooter speaking last in the first negotiation. Choose your FINAL target now, including yourself if strategically justified; it will be locked before the final round of speech.",
-    "final_negotiation": "The target is locked. Speak or stay silent; no action or target change is allowed.",
+    "final_target": "You are the shooter speaking last in the first negotiation. Choose your FINAL target now, including yourself if strategically justified. If you switch targets, only the new target may reply before the shot; otherwise the shot follows immediately.",
+    "retarget_reaction": "The shooter changed the locked target to YOU. You alone may react briefly or stay silent. No game action or further target change is allowed.",
     "shot_aftermath_target": "You were just shot at. React briefly to the actual result, including whether the shell was live or blank. You may speak publicly or stay silent. If you died, this is your final reaction.",
     "shot_aftermath_shooter": "Your shot just resolved, possibly against yourself. React briefly to the actual result. You may speak publicly or stay silent; no game action is available in this phase.",
     "shot_aftermath_observer": "You witnessed the shot. Write a brief private reaction. Prefer an empty public_speech unless you have a compelling reason to speak. No game action is available.",
@@ -123,7 +124,8 @@ def parse_show_decision(reply: dict) -> dict:
 
 
 class Show:
-    def __init__(self, directory: Path, key: str, models: dict[int, str], max_calls: int, max_cost: float, max_shots: int):
+    def __init__(self, directory: Path, key: str, models: dict[int, str], max_calls: int, max_cost: float,
+                 max_shots: int, tts: WindowsTTS | None = None):
         self.directory = directory
         self.key = key
         self.models = models
@@ -138,6 +140,7 @@ class Show:
         self.public: list[dict] = []
         self.private: dict[int, list[dict]] = {seat: [] for seat in range(1, 5)}
         self.styles: dict[int, str | None] = {seat: None for seat in range(1, 5)}
+        self.tts = tts
         self.player_windows = False
         self.log_path = directory / "show.jsonl"
 
@@ -160,6 +163,10 @@ class Show:
         elif kind == "repeated_speech_suppressed":
             if not self.player_windows:
                 print(f"[PLAYER {record['seat']}] Повторная реплика скрыта", flush=True)
+        elif kind == "tts_started":
+            print(f"[PLAYER {record['seat']}] Озвучивание...", flush=True)
+        elif kind == "tts_finished":
+            print(f"[PLAYER {record['seat']}] Реплика озвучена", flush=True)
         else:
             print(json.dumps(record, ensure_ascii=False), flush=True)
 
@@ -339,6 +346,13 @@ class Show:
         self.log("model_response", seat=seat, model=model, phase=phase, private_thought=thought,
                  delivery_style=style, style_adjusted=style_adjusted,
                  public_speech=speech, action=selected, usage=usage)
+        if speech and self.tts is not None:
+            self.log("tts_started", seat=seat, phase=phase)
+            try:
+                self.tts.speak(seat, speech)
+            except TTSError as exc:
+                raise Pause(str(exc)) from exc
+            self.log("tts_finished", seat=seat, phase=phase)
         return action
 
     def act(self, seat: int, state: dict, selected: dict) -> dict | None:
@@ -430,8 +444,13 @@ class Show:
         self.log("target_locked", seat=seat, preliminary_socket=preliminary["target_socket"],
                  final_socket=final_target["target_socket"], event_id=state["event_id"])
 
-        self.react(seat, "final_negotiation")
-        self.ask(seat, "final_negotiation", state, [], speech_only=True)
+        if final_target["target_socket"] != preliminary["target_socket"]:
+            states = self.states()
+            new_target = next((number for number, target_state in states.items()
+                               if target_state["player_socket"] == final_target["target_socket"]), None)
+            if new_target is None:
+                raise Pause("New target has no local seat")
+            self.ask(new_target, "retarget_reaction", states[new_target], [], speech_only=True)
         current = self.states()[seat]
         if (current["event_id"] != state["event_id"] or current["match_id"] != state["match_id"]
                 or current["active_socket"] != current["player_socket"]
@@ -508,6 +527,7 @@ def main() -> None:
     parser.add_argument("--preview", action="store_true", help="show seat-to-model mapping without API calls")
     parser.add_argument("--player-windows", action="store_true", help="open four separate player terminals")
     parser.add_argument("--no-player-windows", action="store_true", help="deprecated: one terminal is now the default")
+    parser.add_argument("--no-tts", action="store_true", help="disable spoken public lines")
     args = parser.parse_args()
     if args.player_windows and args.no_player_windows:
         parser.error("choose either --player-windows or --no-player-windows")
@@ -527,7 +547,8 @@ def main() -> None:
     key = os.environ.get("OPENROUTER_API_KEY")
     if not key:
         raise SystemExit("Set OPENROUTER_API_KEY in this PowerShell session")
-    show = Show(directory, key, models, args.max_calls, args.max_cost, args.max_shots)
+    show = Show(directory, key, models, args.max_calls, args.max_cost, args.max_shots,
+                tts=None if args.no_tts else WindowsTTS())
     try:
         if args.player_windows:
             start_player_windows(show.log_path)
